@@ -39,4 +39,5 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NOTIFY_ON_UNKNOWN: ${{ vars.NOTIFY_ON_UNKNOWN }}
+          DEBUG: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}  # verbose log on manual runs
         run: python check_stock.py

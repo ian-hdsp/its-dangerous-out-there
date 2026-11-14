@@ -144,7 +144,19 @@ PAGE_JS = r"""
 def collect(page, product: dict) -> Evidence:
     ev = Evidence()
 
+    debug = os.environ.get("DEBUG") == "1"
+
     def on_response(resp):
+        if debug and "redsky" in resp.url:
+            body = ""
+            try:
+                body = resp.text()
+            except Exception:
+                pass
+            print(f"  [debug] {resp.status} {resp.url[:160]}")
+            for m in re.finditer(r'"(availability_status|is_out_of_stock_in_all_store_locations|'
+                                 r'purchase_limit|availability)"\s*:\s*("?[A-Za-z_0-9]+"?)', body):
+                print(f"      {m.group(1)}={m.group(2)}")
         if "redsky" in resp.url and "fulfillment" in resp.url:
             try:
                 data = resp.json()
@@ -167,7 +179,34 @@ def collect(page, product: dict) -> Evidence:
     ev.main_buttons = data["buttons"]
     ev.page_text_head = data["head"]
     ev.price = data["price"]
+    if debug:
+        print(page.evaluate(DEBUG_JS))
     return ev
+
+
+# Debug dump: where we landed, the h1, and every element whose text looks like a buy/stock signal.
+DEBUG_JS = r"""
+() => {
+  const out = [`  [debug] final=${location.href} title=${document.title.slice(0, 100)}`];
+  const h1 = document.querySelector('h1');
+  out.push(`  [debug] h1=${h1 ? h1.innerText.slice(0, 100) : null} ` +
+           `jsonld=${document.querySelectorAll('script[type="application/ld+json"]').length}`);
+  const re = /add to cart|ship it|pick it up|deliver it|sold out|out of stock|unavailable|notify me|coming soon|preorder/i;
+  const seen = new Set();
+  for (const el of document.querySelectorAll('button, [role="button"], [data-test], a, span, div, p')) {
+    const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ');
+    const t = (el.matches('button,[role="button"]') ? el.innerText : own).trim().replace(/\s+/g, ' ').slice(0, 80);
+    if (!t || !re.test(t)) continue;
+    const key = el.tagName + t + (el.getAttribute('data-test') || '');
+    if (seen.has(key) || seen.size > 40) continue;
+    seen.add(key);
+    out.push(`  [debug] <${el.tagName.toLowerCase()} data-test=${el.getAttribute('data-test')} ` +
+             `disabled=${!!el.disabled}> ${t}`);
+  }
+  out.push(`  [debug] body: ${(document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 600)}`);
+  return out.join('\n');
+}
+"""
 
 
 def notify(title: str, body: str, url: str, priority: str = "urgent") -> None:

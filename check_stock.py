@@ -272,12 +272,54 @@ def main() -> int:
             for prod, status, reason in results:
                 f.write(f"| [{prod['retailer']}]({prod['url']}) | {status} | {reason} |\n")
 
+    state_path = os.environ.get("STATE_FILE", "state.json")
+    state = load_state(state_path)
+    notify_unknown = os.environ.get("NOTIFY_ON_UNKNOWN") == "1"
     for prod, status, reason in results:
-        if status == IN_STOCK:
+        prev = state.get(prod["retailer"], {})
+        alert, state[prod["retailer"]] = transition(prev, status, notify_unknown)
+        if alert == "in_stock":
             notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})", prod["url"])
-        elif status == UNKNOWN and os.environ.get("NOTIFY_ON_UNKNOWN") == "1":
+        elif alert == "sold_out":
+            notify(f"Zelda Switch 2 sold out again at {prod['retailer']}", reason, prod["url"], priority="low")
+        elif alert == "unknown":
             notify(f"Stock check couldn't read {prod['retailer']}", reason, prod["url"], priority="low")
+        print(f"  state: {prev or 'none'} -> {state[prod['retailer']]}, alert={alert}")
+    save_state(state_path, state)
     return 0
+
+
+def load_state(path: str) -> dict:
+    """Last statuses from the previous run (restored from the Actions cache). Missing = fresh start."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(path: str, state: dict) -> None:
+    with open(path, "w") as f:
+        json.dump(state, f)
+
+
+def transition(prev: dict, status: str, notify_unknown: bool = False) -> tuple[str | None, dict]:
+    """Decide which push (if any) a status change deserves; return (alert, new_state).
+
+    `known` remembers the last non-UNKNOWN status, so a page that briefly fails to load
+    mid-drop (IN_STOCK -> UNKNOWN -> IN_STOCK) doesn't trigger a second urgent push.
+    With no previous state, an IN_STOCK result still alerts (better a duplicate than a miss).
+    """
+    known_prev = prev.get("known")
+    known = known_prev if status == UNKNOWN else status
+    alert = None
+    if status == IN_STOCK and known_prev != IN_STOCK:
+        alert = "in_stock"
+    elif status == OUT_OF_STOCK and known_prev == IN_STOCK:
+        alert = "sold_out"
+    elif status == UNKNOWN and prev.get("status") != UNKNOWN and notify_unknown:
+        alert = "unknown"
+    return alert, {"status": status, "known": known}
 
 
 if __name__ == "__main__":

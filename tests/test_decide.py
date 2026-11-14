@@ -1,4 +1,4 @@
-from check_stock import IN_STOCK, OUT_OF_STOCK, UNKNOWN, Evidence, decide
+from check_stock import IN_STOCK, OUT_OF_STOCK, UNKNOWN, Evidence, decide, transition
 
 
 def btn(text, disabled=False):
@@ -52,6 +52,36 @@ def test_block_page_text():
 
 def test_no_signal():
     assert decide(Evidence(http_status=200))[0] == UNKNOWN
+
+
+def run_sequence(statuses, notify_unknown=False):
+    state, alerts = {}, []
+    for s in statuses:
+        alert, state = transition(state, s, notify_unknown)
+        alerts.append(alert)
+    return alerts
+
+
+def test_push_only_on_change_to_in_stock():
+    assert run_sequence([OUT_OF_STOCK, IN_STOCK, IN_STOCK, IN_STOCK]) == [None, "in_stock", None, None]
+
+
+def test_sold_out_again_and_next_drop():
+    seq = [OUT_OF_STOCK, IN_STOCK, OUT_OF_STOCK, OUT_OF_STOCK, IN_STOCK]
+    assert run_sequence(seq) == [None, "in_stock", "sold_out", None, "in_stock"]
+
+
+def test_unknown_blip_mid_drop_does_not_repush():
+    assert run_sequence([IN_STOCK, UNKNOWN, IN_STOCK]) == ["in_stock", None, None]
+
+
+def test_unknown_pushes_once_when_enabled():
+    seq = [OUT_OF_STOCK, UNKNOWN, UNKNOWN, OUT_OF_STOCK, UNKNOWN]
+    assert run_sequence(seq, notify_unknown=True) == [None, "unknown", None, None, "unknown"]
+
+
+def test_no_previous_state_in_stock_alerts():
+    assert transition({}, IN_STOCK)[0] == "in_stock"
 
 
 def test_target_api_refused_is_unknown():

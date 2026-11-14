@@ -280,6 +280,9 @@ def main() -> int:
         alert, state[prod["retailer"]] = transition(prev, status, notify_unknown)
         if alert == "in_stock":
             notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})", prod["url"])
+        elif alert == "reminder":
+            notify(f"Reminder: Zelda Switch 2 STILL in stock at {prod['retailer']}",
+                   f"Tap to open. ({reason})", prod["url"], priority="high")
         elif alert == "sold_out":
             notify(f"Zelda Switch 2 sold out again at {prod['retailer']}", reason, prod["url"], priority="low")
         elif alert == "unknown":
@@ -315,6 +318,8 @@ def transition(prev: dict, status: str, notify_unknown: bool = False) -> tuple[s
     alert = None
     if status == IN_STOCK and known_prev != IN_STOCK:
         alert = "in_stock"
+    elif status == IN_STOCK:
+        alert = "reminder"  # still in stock: nudge again every run (~5 min) until it sells out
     elif status == OUT_OF_STOCK and known_prev == IN_STOCK:
         alert = "sold_out"
     elif status == UNKNOWN and prev.get("status") != UNKNOWN and notify_unknown:

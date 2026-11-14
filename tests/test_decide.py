@@ -62,8 +62,13 @@ def run_sequence(statuses, notify_unknown=False):
     return alerts
 
 
-def test_push_only_on_change_to_in_stock():
-    assert run_sequence([OUT_OF_STOCK, IN_STOCK, IN_STOCK, IN_STOCK]) == [None, "in_stock", None, None]
+def test_urgent_once_then_reminders_while_in_stock():
+    seq = [OUT_OF_STOCK, IN_STOCK, IN_STOCK, IN_STOCK]
+    assert run_sequence(seq) == [None, "in_stock", "reminder", "reminder"]
+
+
+def test_no_push_while_out_of_stock():
+    assert run_sequence([OUT_OF_STOCK, OUT_OF_STOCK, OUT_OF_STOCK]) == [None, None, None]
 
 
 def test_sold_out_again_and_next_drop():
@@ -72,7 +77,7 @@ def test_sold_out_again_and_next_drop():
 
 
 def test_unknown_blip_mid_drop_does_not_repush():
-    assert run_sequence([IN_STOCK, UNKNOWN, IN_STOCK]) == ["in_stock", None, None]
+    assert run_sequence([IN_STOCK, UNKNOWN, IN_STOCK]) == ["in_stock", None, "reminder"]
 
 
 def test_unknown_pushes_once_when_enabled():

@@ -24,9 +24,10 @@ repo would use ~13,000 min/month (the free tier is 2,000).
 ## What to expect
 
 - **OUT_OF_STOCK** = working (reads the "Sold out" button next to the product title).
-- Pushes only go out when the status changes: one **urgent** push when it comes in stock,
-  and one low-priority "sold out again" push when it's gone. The last status is kept in
-  the Actions cache (`state.json`). A one-off page failure mid-drop doesn't re-trigger the
+- Pushes: one **urgent** push when it comes in stock, then a high-priority "still in
+  stock" reminder on every run (~5 min) while it lasts, and one low-priority "sold out
+  again" push when it's gone. Nothing while it stays sold out. The last status is kept in
+  the Actions cache (`state.json`); a one-off page failure mid-drop doesn't re-trigger the
   urgent push. If the cache is ever lost, an in-stock result still pushes.
 - GitHub's `*/5` schedule is best-effort; runs can be 5–15+ min late at busy times.
 - GitHub disables scheduled workflows after 60 days with no repo commits.

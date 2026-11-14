@@ -52,3 +52,8 @@ def test_block_page_text():
 
 def test_no_signal():
     assert decide(Evidence(http_status=200))[0] == UNKNOWN
+
+
+def test_target_api_refused_is_unknown():
+    status, reason = decide(Evidence(http_status=200, api_http_errors=[435, 435]))
+    assert status == UNKNOWN and "435" in reason

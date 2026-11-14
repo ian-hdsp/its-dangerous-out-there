@@ -20,13 +20,29 @@ Zelda 40th Anniversary Switch 2 console can be added to the cart.
 4. Repo → **Actions** tab → enable workflows → **Zelda Switch 2 stock check → Run workflow**.
    Open the run: the summary shows each retailer as IN_STOCK / OUT_OF_STOCK / UNKNOWN.
 
+## Runs on a home computer (self-hosted runner)
+
+Target refuses GitHub's data-center IPs (its API returns HTTP 435), so the workflow uses
+`runs-on: self-hosted`: a GitHub runner on a home computer with a residential IP.
+
+1. **Lock down fork PRs first (important: this repo is public).** Settings → Actions →
+   General → "Approval for running fork pull request workflows from contributors" →
+   **Require approval for all external contributors**. Without this, a stranger's pull
+   request could run code on your computer.
+2. Settings → Actions → **Runners → New self-hosted runner**, pick your OS, and run the
+   Download and Configure commands it shows (accept the defaults).
+3. Keep it running: `./run.sh` (or `run.cmd` on Windows) in a terminal, or install it as a
+   service so it survives restarts: `sudo ./svc.sh install && sudo ./svc.sh start`
+   (macOS/Linux) or choose "run as service" during config on Windows.
+4. Needs Python available on that computer. On Linux, also run once:
+   `python -m playwright install-deps chromium` (needs sudo).
+
+While the computer is asleep or off, nothing is checked (runs wait in the queue).
+
 ## What to expect
 
 - **OUT_OF_STOCK** for both = working.
-- **UNKNOWN "HTTP 403" / "bot-check"** = the retailer is blocking GitHub's data-center IPs.
-  Fix: run the same workflow on a **self-hosted runner** on a home computer (residential IP):
-  Settings → Actions → Runners → New self-hosted runner, then change
-  `runs-on: ubuntu-latest` to `runs-on: self-hosted`.
+- **UNKNOWN "Target API refused (HTTP 435)"** = Target still sees a bot, even from home.
 - GitHub's `*/5` schedule is best-effort; runs can be 5–15+ min late at busy times.
 - GitHub disables scheduled workflows after 60 days with no repo commits.
 - When it fires, it pushes every run (every ~5 min) while the item stays in stock.

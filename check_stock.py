@@ -62,6 +62,7 @@ class Evidence:
     page_text_head: str = ""
     jsonld_availability: list[str] = field(default_factory=list)
     target_api_status: list[str] = field(default_factory=list)
+    api_http_errors: list[int] = field(default_factory=list)  # Target API calls that were refused
     main_buttons: list[dict] = field(default_factory=list)  # {"text": str, "disabled": bool}
     price: str | None = None
 
@@ -104,6 +105,8 @@ def decide(ev: Evidence) -> tuple[str, str]:
     if jl:
         return jl, f"JSON-LD: {ev.jsonld_availability}"
 
+    if ev.api_http_errors:
+        return UNKNOWN, f"Target API refused (HTTP {sorted(set(ev.api_http_errors))}; likely bot-blocked)"
     return UNKNOWN, f"no clear signal (buttons={[b['text'] for b in ev.main_buttons][:5]})"
 
 
@@ -147,6 +150,8 @@ def collect(page, product: dict) -> Evidence:
     debug = os.environ.get("DEBUG") == "1"
 
     def on_response(resp):
+        if "redsky" in resp.url and resp.status >= 400:
+            ev.api_http_errors.append(resp.status)
         if debug and "redsky" in resp.url:
             body = ""
             try:

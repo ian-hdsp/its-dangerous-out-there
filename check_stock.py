@@ -186,7 +186,25 @@ def collect(page, product: dict) -> Evidence:
     ev.price = data["price"]
     if debug:
         print(page.evaluate(DEBUG_JS))
+        if product["retailer"] == "Target" and resp:
+            dump_served_html(resp.text(), product["tcin"])
     return ev
+
+
+def dump_served_html(html: str, tcin: str) -> None:
+    """Debug only: what stock data is embedded in the HTML Target's server returned?"""
+    print(f"  [debug] served html: {len(html)} bytes, tcin mentions={html.count(tcin)}, "
+          f"__TGT_DATA__={'__TGT_DATA__' in html}, __NEXT_DATA__={'__NEXT_DATA__' in html}")
+    keys = (r"availability_status|is_out_of_stock_in_all_store_locations|"
+            r"out_of_stock|sold_out|purchase_limit|shipping_options|availability")
+    # Embedded JSON is often string-escaped (\"key\":\"VALUE\"), so allow optional backslashes.
+    pat = re.compile(r'\\*"(' + keys + r')\\*"\s*:\s*\\*"?([A-Za-z_0-9]+)')
+    for i, m in enumerate(pat.finditer(html)):
+        if i >= 25:
+            print("      ... (more)")
+            break
+        ctx = html[max(0, m.start() - 90):m.start()].replace("\\", "")
+        print(f"      {m.group(1)}={m.group(2)}   <- ...{ctx[-90:]!r}")
 
 
 # Debug dump: where we landed, the h1, and every element whose text looks like a buy/stock signal.

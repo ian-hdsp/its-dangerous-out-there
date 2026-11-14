@@ -1,4 +1,4 @@
-"""Check Target and the Nintendo Store for the Zelda 40th Anniversary Switch 2 console.
+"""Check the Nintendo Store for the Zelda 40th Anniversary Switch 2 console.
 
 Runs headless Chromium (Playwright), decides IN_STOCK / OUT_OF_STOCK / UNKNOWN per
 retailer, and sends an urgent ntfy.sh push when anything is IN_STOCK.
@@ -21,12 +21,12 @@ import requests
 
 IN_STOCK, OUT_OF_STOCK, UNKNOWN = "IN_STOCK", "OUT_OF_STOCK", "UNKNOWN"
 
+# Target (TCIN 1013322047) is not checked: its bot protection refuses GitHub-hosted runners
+# (stock API returns HTTP 435), so it can only ever report UNKNOWN from here. Target is covered
+# by a separate hourly restock-tracker alert. The Target parsing code below is kept in case a
+# runner with a residential IP is added later; re-add this entry to enable it:
+#   {"retailer": "Target", "url": "https://www.target.com/p/-/A-1013322047", "tcin": "1013322047"},
 PRODUCTS = [
-    {
-        "retailer": "Target",
-        "url": "https://www.target.com/p/-/A-1013322047",
-        "tcin": "1013322047",
-    },
     {
         "retailer": "Nintendo Store",
         "url": "https://www.nintendo.com/us/store/products/"

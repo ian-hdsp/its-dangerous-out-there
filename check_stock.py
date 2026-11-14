@@ -1,0 +1,222 @@
+"""Check Target and the Nintendo Store for the Zelda 40th Anniversary Switch 2 console.
+
+Runs headless Chromium (Playwright), decides IN_STOCK / OUT_OF_STOCK / UNKNOWN per
+retailer, and sends an urgent ntfy.sh push when anything is IN_STOCK.
+
+Env vars:
+  NTFY_TOPIC        required to send pushes (keep it secret; anyone with it can read them)
+  NTFY_SERVER       optional, default https://ntfy.sh
+  NOTIFY_ON_UNKNOWN optional "1" -> also push when a page can't be read (e.g. bot-blocked)
+  DRY_RUN           optional "1" -> print instead of sending
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from dataclasses import dataclass, field
+
+import requests
+
+IN_STOCK, OUT_OF_STOCK, UNKNOWN = "IN_STOCK", "OUT_OF_STOCK", "UNKNOWN"
+
+PRODUCTS = [
+    {
+        "retailer": "Target",
+        "url": "https://www.target.com/p/-/A-1013322047",
+        "tcin": "1013322047",
+    },
+    {
+        "retailer": "Nintendo Store",
+        "url": "https://www.nintendo.com/us/store/products/"
+        "nintendo-switch-2-the-legend-of-zelda-40th-anniversary-edition-121642/",
+    },
+]
+
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+BUY_WORDS = re.compile(r"\b(add to cart|ship it|buy now|pick it up|deliver it)\b", re.I)
+SOLD_OUT_WORDS = re.compile(
+    r"\b(sold out|out of stock|currently unavailable|notify me|coming soon|unavailable)\b", re.I
+)
+BLOCK_WORDS = re.compile(
+    r"(access denied|are you a human|verify you are human|captcha|request blocked|"
+    r"unusual traffic|pardon our interruption)",
+    re.I,
+)
+
+# Target fulfillment API values (from the JSON the product page itself loads).
+TARGET_IN = {"IN_STOCK", "LIMITED_STOCK", "PRE_ORDER_SELLABLE"}
+TARGET_OUT = {"OUT_OF_STOCK", "UNAVAILABLE", "DISCONTINUED", "PRE_ORDER_UNSELLABLE"}
+
+
+@dataclass
+class Evidence:
+    """Everything scraped from one page; decide() turns it into a status."""
+
+    http_status: int | None = None
+    page_text_head: str = ""
+    jsonld_availability: list[str] = field(default_factory=list)
+    target_api_status: list[str] = field(default_factory=list)
+    main_buttons: list[dict] = field(default_factory=list)  # {"text": str, "disabled": bool}
+    price: str | None = None
+
+
+def _jsonld_status(values: list[str]) -> str | None:
+    vals = [v.rsplit("/", 1)[-1].lower() for v in values]
+    if any(v in ("instock", "limitedavailability", "preorder", "onlineonly") for v in vals):
+        return IN_STOCK
+    if vals and all(v in ("outofstock", "soldout", "discontinued", "preordersoldout") for v in vals):
+        return OUT_OF_STOCK
+    return None
+
+
+def decide(ev: Evidence) -> tuple[str, str]:
+    """Return (status, reason). Conservative: only IN_STOCK on a positive signal."""
+    if ev.http_status and ev.http_status >= 400:
+        return UNKNOWN, f"HTTP {ev.http_status} (likely bot-blocked)"
+    if BLOCK_WORDS.search(ev.page_text_head):
+        return UNKNOWN, "bot-check / block page"
+
+    # 1) Target's own fulfillment JSON is the most reliable signal.
+    if ev.target_api_status:
+        s = {x.upper() for x in ev.target_api_status}
+        if s & TARGET_IN:
+            return IN_STOCK, f"Target API: {sorted(s)}"
+        if s <= TARGET_OUT:
+            return OUT_OF_STOCK, f"Target API: {sorted(s)}"
+
+    # 2) Enabled buy button in the main product area.
+    enabled_buy = [b for b in ev.main_buttons if BUY_WORDS.search(b["text"]) and not b["disabled"]]
+    sold_out = [b for b in ev.main_buttons if SOLD_OUT_WORDS.search(b["text"])]
+    jl = _jsonld_status(ev.jsonld_availability)
+
+    if enabled_buy and not sold_out:
+        return IN_STOCK, f"buy button: {enabled_buy[0]['text']!r}"
+    if sold_out and not enabled_buy:
+        return OUT_OF_STOCK, f"button: {sold_out[0]['text']!r}"
+
+    # 3) schema.org structured data.
+    if jl:
+        return jl, f"JSON-LD: {ev.jsonld_availability}"
+
+    return UNKNOWN, f"no clear signal (buttons={[b['text'] for b in ev.main_buttons][:5]})"
+
+
+# JS run in the page: JSON-LD offers + buttons near the product title (h1),
+# so "Add to cart" buttons in related-product carousels are ignored.
+PAGE_JS = r"""
+() => {
+  const avail = [];
+  let price = null;
+  for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const walk = (o) => {
+        if (!o || typeof o !== 'object') return;
+        if (Array.isArray(o)) return o.forEach(walk);
+        if (o.availability) avail.push(String(o.availability));
+        if (o.price && !price) price = String(o.price);
+        Object.values(o).forEach(walk);
+      };
+      walk(JSON.parse(s.textContent));
+    } catch (e) {}
+  }
+  const h1 = document.querySelector('h1');
+  let scope = h1, buttons = [];
+  for (let i = 0; scope && i < 8; i++, scope = scope.parentElement) {
+    const bs = [...scope.querySelectorAll('button, [role="button"]')]
+      .map(b => ({text: (b.innerText || b.getAttribute('aria-label') || '').trim().slice(0, 80),
+                  disabled: b.disabled || b.getAttribute('aria-disabled') === 'true'}))
+      .filter(b => b.text);
+    if (bs.some(b => /add to cart|sold out|out of stock|unavailable|notify me|ship it|coming soon/i.test(b.text))) {
+      buttons = bs; break;
+    }
+  }
+  return {avail, price, buttons, head: (document.body ? document.body.innerText : '').slice(0, 3000)};
+}
+"""
+
+
+def collect(page, product: dict) -> Evidence:
+    ev = Evidence()
+
+    def on_response(resp):
+        if "redsky" in resp.url and "fulfillment" in resp.url:
+            try:
+                data = resp.json()
+            except Exception:
+                return
+            found = re.findall(r'"availability_status"\s*:\s*"([A-Z_]+)"', json.dumps(data))
+            ev.target_api_status.extend(found)
+
+    if product["retailer"] == "Target":
+        page.on("response", on_response)
+
+    resp = page.goto(product["url"], wait_until="domcontentloaded", timeout=45_000)
+    ev.http_status = resp.status if resp else None
+    try:
+        page.wait_for_load_state("networkidle", timeout=15_000)
+    except Exception:
+        pass  # pages with long-polling never go idle; continue with what loaded
+    data = page.evaluate(PAGE_JS)
+    ev.jsonld_availability = data["avail"]
+    ev.main_buttons = data["buttons"]
+    ev.page_text_head = data["head"]
+    ev.price = data["price"]
+    return ev
+
+
+def notify(title: str, body: str, url: str, priority: str = "urgent") -> None:
+    topic = os.environ.get("NTFY_TOPIC")
+    if os.environ.get("DRY_RUN") == "1" or not topic:
+        print(f"[notify skipped] {title}: {body} {url}")
+        return
+    server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+    requests.post(
+        f"{server}/{topic}",
+        data=body.encode(),
+        headers={"Title": title, "Priority": priority, "Tags": "rotating_light", "Click": url},
+        timeout=15,
+    ).raise_for_status()
+
+
+def main() -> int:
+    from playwright.sync_api import sync_playwright
+
+    results = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        ctx = browser.new_context(user_agent=USER_AGENT, locale="en-US", viewport={"width": 1366, "height": 900})
+        for product in PRODUCTS:
+            page = ctx.new_page()
+            try:
+                status, reason = decide(collect(page, product))
+            except Exception as e:  # timeouts, navigation errors
+                status, reason = UNKNOWN, f"error: {type(e).__name__}: {e}"[:200]
+            finally:
+                page.close()
+            results.append((product, status, reason))
+            print(f"{product['retailer']:15} {status:12} {reason}")
+        browser.close()
+
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as f:
+            f.write("| Retailer | Status | Reason |\n|---|---|---|\n")
+            for prod, status, reason in results:
+                f.write(f"| [{prod['retailer']}]({prod['url']}) | {status} | {reason} |\n")
+
+    for prod, status, reason in results:
+        if status == IN_STOCK:
+            notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})", prod["url"])
+        elif status == UNKNOWN and os.environ.get("NOTIFY_ON_UNKNOWN") == "1":
+            notify(f"Stock check couldn't read {prod['retailer']}", reason, prod["url"], priority="low")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

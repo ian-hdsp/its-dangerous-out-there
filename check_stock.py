@@ -282,7 +282,7 @@ def main() -> int:
             notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})", prod["url"])
         elif alert == "reminder":
             notify(f"Reminder: Zelda Switch 2 STILL in stock at {prod['retailer']}",
-                   f"Tap to open. ({reason})", prod["url"], priority="high")
+                   f"Tap to open. ({reason})", prod["url"])
         elif alert == "sold_out":
             notify(f"Zelda Switch 2 sold out again at {prod['retailer']}", reason, prod["url"], priority="low")
         elif alert == "unknown":

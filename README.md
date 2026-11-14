@@ -24,7 +24,7 @@ repo would use ~13,000 min/month (the free tier is 2,000).
 ## What to expect
 
 - **OUT_OF_STOCK** = working (reads the "Sold out" button next to the product title).
-- Pushes: one **urgent** push when it comes in stock, then a high-priority "still in
+- Pushes: one **urgent** push when it comes in stock, then an urgent "still in
   stock" reminder on every run (~5 min) while it lasts, and one low-priority "sold out
   again" push when it's gone. Nothing while it stays sold out. The last status is kept in
   the Actions cache (`state.json`); a one-off page failure mid-drop doesn't re-trigger the

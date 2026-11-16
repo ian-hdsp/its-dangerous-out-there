@@ -65,8 +65,17 @@ class Evidence:
     jsonld_availability: list[str] = field(default_factory=list)
     target_api_status: list[str] = field(default_factory=list)
     api_http_errors: list[int] = field(default_factory=list)  # Target API calls that were refused
+    # Stock-related fields seen in data the Nintendo page loads/embeds: (source, key, value).
+    # Recorded to learn which field (if any) shows the real stock when the button says
+    # "Add to cart" but the cart says "The requested quantity is not available".
+    stock_fields: list[tuple[str, str, str]] = field(default_factory=list)
     main_buttons: list[dict] = field(default_factory=list)  # {"text": str, "disabled": bool}
     price: str | None = None
+    title: str = ""  # the page's h1 (product name)
+    # Nintendo's live store data (graph.nintendo.com) for this product: True/False, or None if
+    # not seen. The page can show "Add to cart" from a stale cache while this is False, and
+    # then the cart says "The requested quantity is not available".
+    salable: bool | None = None
 
 
 def _jsonld_status(values: list[str]) -> str | None:
@@ -79,7 +88,22 @@ def _jsonld_status(values: list[str]) -> str | None:
 
 
 def decide(ev: Evidence) -> tuple[str, str]:
-    """Return (status, reason). Conservative: only IN_STOCK on a positive signal."""
+    """Return (status, reason). Conservative: only IN_STOCK on a positive signal.
+
+    For the Nintendo Store, a buyable-looking page only counts as IN_STOCK if the store's
+    live data also says the product is salable (isSalableQty). If that data says it isn't,
+    the "Add to cart" button is a stale-cache false positive, so it's treated as sold out.
+    """
+    status, reason = _decide_page(ev)
+    if status == IN_STOCK and ev.salable is False:
+        return OUT_OF_STOCK, f"{reason}, but isSalableQty=false (cart would say quantity not available)"
+    if status == IN_STOCK and ev.salable is True:
+        return IN_STOCK, f"{reason} + isSalableQty=true"
+    return status, reason
+
+
+def _decide_page(ev: Evidence) -> tuple[str, str]:
+    """Status from the page itself (HTTP status, block page, Target API, buttons, JSON-LD)."""
     if ev.http_status and ev.http_status >= 400:
         return UNKNOWN, f"HTTP {ev.http_status} (likely bot-blocked)"
     if BLOCK_WORDS.search(ev.page_text_head):
@@ -141,13 +165,67 @@ PAGE_JS = r"""
       buttons = bs; break;
     }
   }
-  return {avail, price, buttons, head: (document.body ? document.body.innerText : '').slice(0, 3000)};
+  return {avail, price, buttons, title: h1 ? h1.innerText.trim() : '',
+          head: (document.body ? document.body.innerText : '').slice(0, 3000)};
 }
 """
 
 
+# Any field whose name mentions stock / salable / sold out / inventory / availability /
+# purchasable / orderable / quantity (Adobe Commerce, Next.js payloads and JSON-LD all vary).
+_STOCK_KEY = (r"[A-Za-z_]*(?:[Ss]tock|STOCK|[Ss]alable|[Ss]old_?[Oo]ut|[Ii]nventory|[Aa]vailab|"
+              r"[Pp]urchas|[Oo]rderab|[Qq]uantity|[Qq]ty)[A-Za-z_]*")
+_STOCK_RE = re.compile(r'\\*"(' + _STOCK_KEY + r')\\*"\s*:\s*\\*"?([^"\\,}\]]{1,80})')
+# Third-party widgets on the page whose JSON isn't about the product (e.g. support chat).
+_IGNORE_HOSTS = ("quiq-api.com", "quiq.com")
+
+
+def scan_stock_fields(text: str, source: str, limit: int = 40) -> list[tuple[str, str, str]]:
+    """Find "key": value pairs for stock-like keys in JSON or in JSON embedded in HTML."""
+    out, seen = [], set()
+    for m in _STOCK_RE.finditer(text):
+        item = (source, m.group(1), m.group(2))
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def _norm(name: str) -> str:
+    return re.sub(r"\s+", " ", name or "").strip().lower()
+
+
+def find_salable(payloads: list, title: str) -> bool | None:
+    """isSalableQty for the product whose name equals the page title, from live-API JSON.
+
+    The same responses can include related products, so match by exact (normalised) name.
+    Any False wins (never push on a conflict); None if this product isn't found.
+    """
+    want, found = _norm(title), []
+
+    def walk(o):
+        if isinstance(o, dict):
+            if "isSalableQty" in o and want and _norm(str(o.get("name", ""))) == want:
+                found.append(o["isSalableQty"])
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    for p in payloads:
+        walk(p)
+    vals = [v for v in found if isinstance(v, bool)]
+    if not vals:
+        return None
+    return all(vals)
+
+
 def collect(page, product: dict) -> Evidence:
     ev = Evidence()
+    nintendo = product["retailer"] == "Nintendo Store"
 
     debug = os.environ.get("DEBUG") == "1"
 
@@ -172,8 +250,35 @@ def collect(page, product: dict) -> Evidence:
             found = re.findall(r'"availability_status"\s*:\s*"([A-Z_]+)"', json.dumps(data))
             ev.target_api_status.extend(found)
 
+    live_api = product.get("live_api", "graph.nintendo.com")
+    live_payloads: list = []
+
+    def on_nintendo_response(resp):
+        # Read-only: look at JSON the product page itself fetched (no extra requests made).
+        try:
+            if live_api in resp.url:
+                try:
+                    live_payloads.append(resp.json())
+                except Exception:
+                    pass
+            if ("nintendo" not in resp.url or any(h in resp.url for h in _IGNORE_HOSTS)
+                    or "json" not in (resp.headers.get("content-type") or "")):
+                return
+            short = re.sub(r"\?.*", "", resp.url)[-80:]
+            body = resp.text()
+            ev.stock_fields.extend(scan_stock_fields(body, f"api {short}"))
+            if os.environ.get("DEBUG") == "1" and "graph.nintendo.com" in resp.url:
+                req = (resp.request.post_data or "")[:600]
+                print(f"  [debug] graph request: {req!r}", flush=True)
+                for m in re.finditer(r"isSalableQty", body):
+                    print(f"  [debug] graph ...{body[max(0, m.start() - 700):m.start() + 120]!r}", flush=True)
+        except Exception:
+            pass
+
     if product["retailer"] == "Target":
         page.on("response", on_response)
+    if nintendo:
+        page.on("response", on_nintendo_response)
 
     resp = page.goto(product["url"], wait_until="domcontentloaded", timeout=45_000)
     ev.http_status = resp.status if resp else None
@@ -186,6 +291,14 @@ def collect(page, product: dict) -> Evidence:
     ev.main_buttons = data["buttons"]
     ev.page_text_head = data["head"]
     ev.price = data["price"]
+    ev.title = data.get("title", "")
+    if nintendo:
+        ev.salable = find_salable(live_payloads, ev.title)
+    if nintendo:
+        try:  # data embedded in the rendered page (e.g. __NEXT_DATA__ / hydration JSON)
+            ev.stock_fields.extend(scan_stock_fields(page.content(), "page"))
+        except Exception:
+            pass
     if debug:
         print(page.evaluate(DEBUG_JS))
         if product["retailer"] == "Target" and resp:
@@ -261,14 +374,22 @@ def check_once(ctx) -> list[tuple[dict, str, str]]:
     results = []
     for product in PRODUCTS:
         page = ctx.new_page()
+        ev = None
         try:
-            status, reason = decide(collect(page, product))
+            ev = collect(page, product)
+            status, reason = decide(ev)
         except Exception as e:  # timeouts, navigation errors
             status, reason = UNKNOWN, f"error: {type(e).__name__}: {e}"[:200]
         finally:
             page.close()
         results.append((product, status, reason))
-        print(f"{time.strftime('%H:%M:%S')} {product['retailer']:15} {status:12} {reason}", flush=True)
+        live = f"  [live isSalableQty={ev.salable}]" if ev is not None and product["retailer"] == "Nintendo Store" else ""
+        print(f"{time.strftime('%H:%M:%S')} {product['retailer']:15} {status:12} {reason}{live}", flush=True)
+        # Log stock fields when the button says buyable (to diagnose "quantity not available"
+        # false positives), or always on test runs.
+        if ev and ev.stock_fields and (status == IN_STOCK or os.environ.get("DEBUG") == "1"):
+            for source, key, value in ev.stock_fields:
+                print(f"    stock field [{source}] {key}={value}", flush=True)
     return results
 
 
@@ -298,6 +419,15 @@ def main() -> int:
     near-continuous no matter how late the schedule fires.
     """
     from playwright.sync_api import sync_playwright
+
+    if os.environ.get("SEND_TEST_PUSH") == "1":
+        # One push in the real IN STOCK format, to check GitHub -> ntfy -> phone end to end.
+        # Only ever on test runs, so it's always titled "[TEST] ..." with the test-tube tag.
+        os.environ["TEST_RUN"] = "1"
+        prod = PRODUCTS[0]
+        notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}",
+               "Tap to open. (end-to-end test push: not a real drop)", prod["url"], tag="in_stock")
+        print("sent [TEST] push", flush=True)
 
     interval = max(30, int(os.environ.get("CHECK_INTERVAL", "60")))  # floor: be polite to the store
     deadline = time.time() + 60 * float(os.environ.get("LOOP_MINUTES", "0"))

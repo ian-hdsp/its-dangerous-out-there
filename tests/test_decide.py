@@ -1,3 +1,4 @@
+import os
 from check_stock import IN_STOCK, OUT_OF_STOCK, UNKNOWN, Evidence, decide, transition
 
 
@@ -136,3 +137,82 @@ def test_desktop_alert_ignores_test_pushes():
     d.handle({"event": "message", "tags": ["test_tube", "rotating_light", "in_stock"],
               "title": "[TEST] Zelda", "time": time.time(), "click": "test"})
     assert opened == []
+
+
+def test_scan_stock_fields_plain_and_escaped_json():
+    from check_stock import scan_stock_fields
+    plain = '{"sku":"121642","stock_status":"IN_STOCK","only_x_left_in_stock":null,"salable_qty":0}'
+    escaped = '<script>self.__next_f.push("{\\"stockStatus\\":\\"OUT_OF_STOCK\\",\\"isSalable\\":false}")</script>'
+    got = scan_stock_fields(plain, "api") + scan_stock_fields(escaped, "page")
+    assert ("api", "stock_status", "IN_STOCK") in got
+    assert ("api", "salable_qty", "0") in got
+    assert ("page", "stockStatus", "OUT_OF_STOCK") in got
+    assert ("page", "isSalable", "false") in got
+
+
+def test_scan_stock_fields_broad_names_and_url_values():
+    from check_stock import scan_stock_fields
+    text = ('{"offers":{"availability":"https://schema.org/OutOfStock"},'
+            '"isSoldOut":true,"maxOrderQuantity":2,"inventoryLevel":"NONE","name":"x"}')
+    got = {(k, v) for _, k, v in scan_stock_fields(text, "page")}
+    assert ("availability", "https://schema.org/OutOfStock") in got
+    assert ("isSoldOut", "true") in got
+    assert ("maxOrderQuantity", "2") in got
+    assert ("inventoryLevel", "NONE") in got
+    assert not any(k == "name" for k, _ in got)
+
+
+def _btn_ev(salable):
+    return Evidence(http_status=200, main_buttons=[btn("Add to cart")], salable=salable)
+
+
+def test_add_to_cart_but_not_salable_is_out_of_stock():
+    status, reason = decide(_btn_ev(False))
+    assert status == OUT_OF_STOCK and "isSalableQty=false" in reason
+
+
+def test_add_to_cart_and_salable_is_in_stock():
+    status, reason = decide(_btn_ev(True))
+    assert status == IN_STOCK and "isSalableQty=true" in reason
+
+
+def test_add_to_cart_without_live_data_still_in_stock():
+    # if Nintendo's live data isn't seen at all, fall back to the button (don't miss a drop)
+    assert decide(_btn_ev(None))[0] == IN_STOCK
+
+
+def test_find_salable_matches_this_product_not_related_items():
+    from check_stock import find_salable
+    title = "Nintendo Switch™ 2 – The Legend of Zelda™ – 40th Anniversary Edition"
+    payload = {"data": {"product": {"name": title, "isSalableQty": False,
+                                    "related": [{"name": "Pro Controller", "isSalableQty": True}]}}}
+    assert find_salable([payload], title) is False
+    payload["data"]["product"]["isSalableQty"] = True
+    assert find_salable([payload], "  " + title.upper() + " ") is True
+    assert find_salable([{"name": "Other", "isSalableQty": True}], title) is None
+
+
+def test_send_test_push_is_always_labelled(monkeypatch):
+    import check_stock as c
+    sent = []
+    monkeypatch.setattr(c, "notify", lambda title, body, url, priority="urgent", tag="":
+                        sent.append((os.environ.get("TEST_RUN"), title, tag)))
+    monkeypatch.setenv("SEND_TEST_PUSH", "1")
+    monkeypatch.delenv("TEST_RUN", raising=False)
+    monkeypatch.setenv("LOOP_MINUTES", "0")
+
+    class Stop(Exception):
+        pass
+
+    # stand-in for Playwright (not installed in the unit-test CI job); stop before any browser
+    import sys
+    import types
+    fake = types.ModuleType("playwright.sync_api")
+    fake.sync_playwright = lambda: (_ for _ in ()).throw(Stop())
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake)
+    try:
+        c.main()
+    except Stop:
+        pass
+    assert sent and sent[0][0] == "1" and sent[0][2] == "in_stock"

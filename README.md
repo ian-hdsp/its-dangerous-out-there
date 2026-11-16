@@ -38,9 +38,13 @@ repo would use ~13,000 min/month (the free tier is 2,000).
   between. The last status is kept in the Actions cache (`state.json`); a one-off page
   failure mid-drop doesn't re-trigger the push. If the cache is lost, an in-stock result
   still pushes.
-- The watcher reads the product page. Nintendo's page can show "Add to cart" while the
-  cart still says "quantity not available" (seen Nov 16), so a push means "go try now",
-  not a guaranteed purchase.
+- **False-positive filter:** Nintendo's page can show "Add to cart" from a stale cache while
+  the cart says "The requested quantity is not available" (seen Nov 16). The page also loads
+  the store's live data from `graph.nintendo.com`, which includes `isSalableQty` for the
+  product. The watcher only pushes IN STOCK when the button says "Add to cart" **and**
+  `isSalableQty=true` for this product (matched by its exact title, since related products
+  appear in the same data). If the live data isn't seen at all, it falls back to the button
+  alone rather than risk missing a drop. Each check's log line shows the live value.
 - GitHub disables scheduled workflows after 60 days with no repo commits.
 
 ## Check out faster

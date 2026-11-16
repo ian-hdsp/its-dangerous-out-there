@@ -9,6 +9,7 @@ Env vars:
   NOTIFY_ON_UNKNOWN optional "1" -> also push when a page can't be read (e.g. bot-blocked)
   DRY_RUN           optional "1" -> print instead of sending
   TEST_RUN          optional "1" -> label every push "[TEST]" with a test-tube tag (manual runs)
+  PUSHOVER_USER / PUSHOVER_TOKEN  optional -> also send alerts via Pushover (IN STOCK = emergency)
 """
 from __future__ import annotations
 
@@ -354,18 +355,39 @@ DEBUG_JS = r"""
 """
 
 
-def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str = "") -> None:
-    """Send an ntfy push. `tag` (e.g. "in_stock") lets desktop_alert.py tell alert types apart."""
-    topic = os.environ.get("NTFY_TOPIC")
-    if os.environ.get("DRY_RUN") == "1" or not topic:
-        prefix = "[TEST] " if os.environ.get("TEST_RUN") == "1" else ""
-        print(f"[notify skipped] {prefix}{title}: {body} {url}")
-        return
-    server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
-    tags = ["rotating_light", tag]
-    if os.environ.get("TEST_RUN") == "1":  # manual/test run: make it unmistakable
+PUSHOVER_API = "https://api.pushover.net/1"
+
+
+def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str = "") -> str | None:
+    """Send one alert to every configured channel: ntfy (NTFY_TOPIC) and Pushover
+    (PUSHOVER_USER + PUSHOVER_TOKEN). Channels are independent: one failing never stops the
+    other, and nothing here raises. `tag` (e.g. "in_stock") lets desktop_alert.py tell alert
+    types apart. Returns the Pushover emergency receipt (for cancelling repeats), if any."""
+    test = os.environ.get("TEST_RUN") == "1"
+    if test:  # manual/test run: make it unmistakable on every channel
         title = "[TEST] " + title
-        tags = ["test_tube"] + tags
+    topic = os.environ.get("NTFY_TOPIC")
+    po_user, po_token = os.environ.get("PUSHOVER_USER"), os.environ.get("PUSHOVER_TOKEN")
+    if os.environ.get("DRY_RUN") == "1" or not (topic or (po_user and po_token)):
+        print(f"[notify skipped] {title}: {body} {url}")
+        return None
+    receipt = None
+    if topic:
+        try:
+            _notify_ntfy(topic, title, body, url, priority, tag, test)
+        except Exception as e:
+            print(f"  ntfy push failed: {e}", flush=True)
+    if po_user and po_token:
+        try:
+            receipt = _notify_pushover(po_user, po_token, title, body, url, priority, tag, test)
+        except Exception as e:
+            print(f"  Pushover push failed: {e}", flush=True)
+    return receipt
+
+
+def _notify_ntfy(topic, title, body, url, priority, tag, test) -> None:
+    server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+    tags = (["test_tube"] if test else []) + ["rotating_light", tag]
     headers = {
         "Title": title,
         "Priority": priority,
@@ -375,6 +397,38 @@ def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str =
         "Actions": f"view, Open product page, {url}, clear=true",
     }
     requests.post(f"{server}/{topic}", data=body.encode(), headers=headers, timeout=15).raise_for_status()
+
+
+def pushover_priority(priority: str, tag: str) -> int:
+    """IN STOCK = 2 (emergency: repeats until acknowledged; Critical Alert on iPhone if enabled),
+    other urgent (reminder) = 1 (high), low (sold out) = -1 (quiet), anything else = 0."""
+    if tag == "in_stock":
+        return 2
+    return {"urgent": 1, "high": 1, "low": -1, "min": -2}.get(priority, 0)
+
+
+def _notify_pushover(user, token, title, body, url, priority, tag, test) -> str | None:
+    prio = pushover_priority(priority, tag)
+    data = {"token": token, "user": user, "title": title[:250], "message": body[:1024],
+            "url": url, "url_title": "Open product page", "priority": prio}
+    if prio == 2:
+        # Repeat every 60 s until acknowledged, for up to 20 min (~one drop); tests stop sooner.
+        data.update(retry=60, expire=180 if test else 1200)
+    r = requests.post(f"{PUSHOVER_API}/messages.json", data=data, timeout=15)
+    r.raise_for_status()
+    return r.json().get("receipt") if prio == 2 else None
+
+
+def cancel_pushover(receipt: str) -> None:
+    """Stop an emergency alert repeating (e.g. the drop sold out before it was acknowledged)."""
+    token = os.environ.get("PUSHOVER_TOKEN")
+    if not (receipt and token) or os.environ.get("DRY_RUN") == "1":
+        return
+    try:
+        requests.post(f"{PUSHOVER_API}/receipts/{receipt}/cancel.json", data={"token": token},
+                      timeout=15).raise_for_status()
+    except Exception as e:
+        print(f"  Pushover cancel failed: {e}", flush=True)
 
 
 def check_once(ctx) -> list[tuple[dict, str, str]]:
@@ -462,8 +516,10 @@ def send_alerts(results, state: dict, notify_unknown: bool) -> None:
             entry.pop("drop_start_after", None)
         try:
             if alert == "in_stock":
-                notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})",
-                       prod["url"], tag="in_stock")
+                receipt = notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})",
+                                 prod["url"], tag="in_stock")
+                if receipt:
+                    entry["pushover_receipt"] = receipt
             elif alert == "reminder":
                 # Same drop, not a new one: says so in the title, with when the drop started.
                 # No "in_stock" tag, so desktop_alert.py doesn't reopen the browser.
@@ -474,6 +530,7 @@ def send_alerts(results, state: dict, notify_unknown: bool) -> None:
                        f"Not a new drop. In stock for {mins} min so far. Tap to open.",
                        prod["url"], tag="repeat")
             elif alert == "sold_out":
+                cancel_pushover(entry.pop("pushover_receipt", None))  # stop repeats if unacknowledged
                 notify(f"Zelda Switch 2 sold out again at {prod['retailer']}", reason, prod["url"], priority="low")
             elif alert == "unknown":
                 notify(f"Stock check couldn't read {prod['retailer']}", reason, prod["url"], priority="low")
@@ -499,6 +556,7 @@ def main() -> int:
         prod = PRODUCTS[0]
         notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}",
                "Tap to open. (end-to-end test push: not a real drop)", prod["url"], tag="in_stock")
+        # Pushover emergency test alerts repeat every 60 s for up to 3 min unless acknowledged.
         print("sent [TEST] push", flush=True)
 
     interval = max(30, int(os.environ.get("CHECK_INTERVAL", "60")))  # floor: be polite to the store

@@ -311,3 +311,91 @@ def test_no_drop_log_without_env(monkeypatch, tmp_path):
     for s in (OUT_OF_STOCK, IN_STOCK, OUT_OF_STOCK):
         c.send_alerts([(prod, s, "r")], state, False)
     assert list(tmp_path.iterdir()) == []
+
+
+class _FakeResp:
+    def __init__(self, payload=None, fail=False):
+        self.payload, self.fail = payload or {}, fail
+
+    def raise_for_status(self):
+        if self.fail:
+            raise RuntimeError("boom")
+
+    def json(self):
+        return self.payload
+
+
+def _capture_posts(monkeypatch, fail_hosts=()):
+    import check_stock as c
+    calls = []
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        calls.append({"url": url, "data": data, "headers": headers})
+        return _FakeResp({"status": 1, "receipt": "R123"}, fail=any(h in url for h in fail_hosts))
+    monkeypatch.setattr(c.requests, "post", fake_post)
+    return calls
+
+
+def _pushover_env(monkeypatch, ntfy=True):
+    monkeypatch.setenv("PUSHOVER_USER", "u")
+    monkeypatch.setenv("PUSHOVER_TOKEN", "t")
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("TEST_RUN", raising=False)
+    if ntfy:
+        monkeypatch.setenv("NTFY_TOPIC", "topic")
+    else:
+        monkeypatch.delenv("NTFY_TOPIC", raising=False)
+
+
+def test_pushover_priorities():
+    from check_stock import pushover_priority
+    assert pushover_priority("urgent", "in_stock") == 2   # IN STOCK: emergency
+    assert pushover_priority("urgent", "repeat") == 1     # reminder: high
+    assert pushover_priority("low", "") == -1             # sold out: quiet
+
+
+def test_in_stock_goes_to_both_channels_as_emergency(monkeypatch):
+    import check_stock as c
+    _pushover_env(monkeypatch)
+    calls = _capture_posts(monkeypatch)
+    receipt = c.notify("Zelda Switch 2 IN STOCK at Nintendo Store", "Tap", "https://p", tag="in_stock")
+    assert receipt == "R123"
+    po = [x for x in calls if "pushover" in x["url"]][0]["data"]
+    assert po["priority"] == 2 and po["retry"] == 60 and po["expire"] == 1200
+    assert po["url"] == "https://p" and po["title"] == "Zelda Switch 2 IN STOCK at Nintendo Store"
+    assert any("ntfy" in x["url"] for x in calls)
+
+
+def test_test_runs_are_labelled_on_pushover_and_expire_sooner(monkeypatch):
+    import check_stock as c
+    _pushover_env(monkeypatch, ntfy=False)
+    monkeypatch.setenv("TEST_RUN", "1")
+    calls = _capture_posts(monkeypatch)
+    c.notify("Zelda Switch 2 IN STOCK at Nintendo Store", "b", "u", tag="in_stock")
+    po = calls[0]["data"]
+    assert po["title"].startswith("[TEST] ") and po["expire"] == 180
+
+
+def test_channels_are_independent(monkeypatch):
+    import check_stock as c
+    _pushover_env(monkeypatch)
+    calls = _capture_posts(monkeypatch, fail_hosts=("ntfy",))
+    assert c.notify("t", "b", "u", tag="in_stock") == "R123"   # ntfy down: Pushover still sent
+    calls = _capture_posts(monkeypatch, fail_hosts=("pushover",))
+    assert c.notify("t", "b", "u", tag="in_stock") is None     # Pushover down: no exception
+    assert any("ntfy" in x["url"] for x in calls)
+
+
+def test_sold_out_cancels_unacknowledged_emergency(monkeypatch):
+    import check_stock as c
+    _pushover_env(monkeypatch, ntfy=False)
+    calls = _capture_posts(monkeypatch)
+    prod = {"retailer": "Nintendo Store", "url": "u"}
+    state = {}
+    for s in (OUT_OF_STOCK, IN_STOCK):
+        c.send_alerts([(prod, s, "r")], state, False)
+    assert state["Nintendo Store"]["pushover_receipt"] == "R123"
+    calls.clear()
+    c.send_alerts([(prod, OUT_OF_STOCK, "r")], state, False)
+    assert any(x["url"].endswith("/receipts/R123/cancel.json") for x in calls)
+    assert "pushover_receipt" not in state["Nintendo Store"]

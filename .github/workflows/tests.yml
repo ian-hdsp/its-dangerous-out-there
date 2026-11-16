@@ -1,0 +1,29 @@
+name: Unit tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # The unit tests cover decide(), status transitions, push labelling and the desktop
+      # listener; none of them launch a browser, so Playwright isn't installed here.
+      - name: Install
+        run: pip install pytest "requests>=2.31"
+
+      - name: Run tests
+        run: PYTHONPATH=. pytest -q tests

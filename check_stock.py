@@ -420,6 +420,15 @@ def main() -> int:
     """
     from playwright.sync_api import sync_playwright
 
+    if os.environ.get("SEND_TEST_PUSH") == "1":
+        # One push in the real IN STOCK format, to check GitHub -> ntfy -> phone end to end.
+        # Only ever on test runs, so it's always titled "[TEST] ..." with the test-tube tag.
+        os.environ["TEST_RUN"] = "1"
+        prod = PRODUCTS[0]
+        notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}",
+               "Tap to open. (end-to-end test push: not a real drop)", prod["url"], tag="in_stock")
+        print("sent [TEST] push", flush=True)
+
     interval = max(30, int(os.environ.get("CHECK_INTERVAL", "60")))  # floor: be polite to the store
     deadline = time.time() + 60 * float(os.environ.get("LOOP_MINUTES", "0"))
     state_path = os.environ.get("STATE_FILE", "state.json")

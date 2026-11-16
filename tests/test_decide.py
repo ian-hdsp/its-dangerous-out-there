@@ -1,3 +1,4 @@
+import os
 from check_stock import IN_STOCK, OUT_OF_STOCK, UNKNOWN, Evidence, decide, transition
 
 
@@ -189,3 +190,29 @@ def test_find_salable_matches_this_product_not_related_items():
     payload["data"]["product"]["isSalableQty"] = True
     assert find_salable([payload], "  " + title.upper() + " ") is True
     assert find_salable([{"name": "Other", "isSalableQty": True}], title) is None
+
+
+def test_send_test_push_is_always_labelled(monkeypatch):
+    import check_stock as c
+    sent = []
+    monkeypatch.setattr(c, "notify", lambda title, body, url, priority="urgent", tag="":
+                        sent.append((os.environ.get("TEST_RUN"), title, tag)))
+    monkeypatch.setenv("SEND_TEST_PUSH", "1")
+    monkeypatch.delenv("TEST_RUN", raising=False)
+    monkeypatch.setenv("LOOP_MINUTES", "0")
+
+    class Stop(Exception):
+        pass
+
+    # stand-in for Playwright (not installed in the unit-test CI job); stop before any browser
+    import sys
+    import types
+    fake = types.ModuleType("playwright.sync_api")
+    fake.sync_playwright = lambda: (_ for _ in ()).throw(Stop())
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake)
+    try:
+        c.main()
+    except Stop:
+        pass
+    assert sent and sent[0][0] == "1" and sent[0][2] == "in_stock"

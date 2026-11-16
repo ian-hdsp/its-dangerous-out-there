@@ -8,6 +8,10 @@ on:
       loop_minutes:
         description: "Minutes to keep checking every 60 s (0 = check once)"
         default: "0"
+      send_test_push:
+        description: "Send one [TEST] push in the IN STOCK format (checks GitHub -> ntfy -> phone)"
+        type: boolean
+        default: false
       mode:
         description: "test = pushes labelled [TEST], separate state; live = behaves like a scheduled run"
         type: choice
@@ -68,6 +72,7 @@ jobs:
           LOOP_MINUTES: ${{ github.event_name == 'schedule' && '50' || inputs.loop_minutes || '0' }}
           CHECK_INTERVAL: "60"
           TEST_RUN: ${{ env.LIVE != 'true' && '1' || '' }}  # label pushes "[TEST]"
+          SEND_TEST_PUSH: ${{ env.LIVE != 'true' && inputs.send_test_push && '1' || '' }}
         run: python check_stock.py
 
       - name: Save status

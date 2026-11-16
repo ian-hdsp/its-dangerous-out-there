@@ -93,3 +93,16 @@ def test_target_api_refused_is_unknown():
     status, reason = decide(Evidence(http_status=200, api_http_errors=[435, 435]))
     assert status == UNKNOWN and "435" in reason
 
+
+
+def test_desktop_alert_only_acts_on_fresh_in_stock_pushes():
+    import time
+    import desktop_alert as d
+    opened = []
+    d.webbrowser.open = lambda url, new=0: opened.append(url)
+    d.alarm = lambda: None
+    d.handle({"event": "message", "tags": ["rotating_light"], "title": "sold out again", "click": "u0"})
+    d.handle({"event": "keepalive"})
+    d.handle({"event": "message", "tags": ["in_stock"], "time": time.time() - 3600, "click": "stale"})
+    d.handle({"event": "message", "tags": ["rotating_light", "in_stock"], "time": time.time(), "click": "u1"})
+    assert opened == ["u1"]

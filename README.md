@@ -38,6 +38,29 @@ repo would use ~13,000 min/month (the free tier is 2,000).
   not a guaranteed purchase.
 - GitHub disables scheduled workflows after 60 days with no repo commits.
 
+## Check out faster
+
+The watcher never buys anything; these just get you to "Add to cart" sooner.
+
+- **Phone:** the IN STOCK push has an **Open product page** button (easier from a lock
+  screen or watch), and tapping the push itself also opens the page.
+- **Computer:** `desktop_alert.py` listens for the push and, within a second or two, opens
+  the product page in your default browser (where you're already signed in) and plays a
+  sound. Standard-library Python only, nothing to install:
+
+  ```
+  python desktop_alert.py YOUR_NTFY_TOPIC --test   # opens the page once: check it works
+  python desktop_alert.py YOUR_NTFY_TOPIC          # leave running
+  ```
+
+  It ignores sold-out pushes, never opens the same push twice, and skips IN STOCK pushes
+  older than 10 minutes (e.g. after the computer wakes from sleep). Don't commit your
+  topic name: this repo is public.
+- **Before the next drop:** stay signed in to the Nintendo Store on phone and computer;
+  save your shipping address and a payment method in your Nintendo Account; make sure
+  2-step verification codes reach you fast; and do a practice checkout of a cheap in-stock
+  item up to the final "Place order" step.
+
 ## Why not Target?
 
 Target's bot protection refuses GitHub-hosted runners: the product page loads, but the

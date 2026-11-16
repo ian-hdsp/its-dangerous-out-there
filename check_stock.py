@@ -233,18 +233,22 @@ DEBUG_JS = r"""
 """
 
 
-def notify(title: str, body: str, url: str, priority: str = "urgent") -> None:
+def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str = "") -> None:
+    """Send an ntfy push. `tag` (e.g. "in_stock") lets desktop_alert.py tell alert types apart."""
     topic = os.environ.get("NTFY_TOPIC")
     if os.environ.get("DRY_RUN") == "1" or not topic:
         print(f"[notify skipped] {title}: {body} {url}")
         return
     server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
-    requests.post(
-        f"{server}/{topic}",
-        data=body.encode(),
-        headers={"Title": title, "Priority": priority, "Tags": "rotating_light", "Click": url},
-        timeout=15,
-    ).raise_for_status()
+    headers = {
+        "Title": title,
+        "Priority": priority,
+        "Tags": ",".join(t for t in ("rotating_light", tag) if t),
+        "Click": url,
+        # A visible button too: easier to hit from a lock screen or watch than the body.
+        "Actions": f"view, Open product page, {url}, clear=true",
+    }
+    requests.post(f"{server}/{topic}", data=body.encode(), headers=headers, timeout=15).raise_for_status()
 
 
 def check_once(ctx) -> list[tuple[dict, str, str]]:
@@ -268,7 +272,8 @@ def send_alerts(results, state: dict, notify_unknown: bool) -> None:
         alert, state[prod["retailer"]] = transition(prev, status, notify_unknown)
         try:
             if alert == "in_stock":
-                notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})", prod["url"])
+                notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})",
+                       prod["url"], tag="in_stock")
             elif alert == "sold_out":
                 notify(f"Zelda Switch 2 sold out again at {prod['retailer']}", reason, prod["url"], priority="low")
             elif alert == "unknown":

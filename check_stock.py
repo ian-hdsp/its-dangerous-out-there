@@ -150,14 +150,13 @@ PAGE_JS = r"""
 """
 
 
-# Field names that commonly carry real stock on Adobe Commerce (Magento) / headless storefronts.
-STOCK_KEYS = (
-    r"stock_status|stockStatus|is_in_stock|isInStock|is_salable|isSalable|salable_qty|salableQty|"
-    r"only_x_left_in_stock|onlyXLeftInStock|qty|quantity|max_sale_qty|maxSaleQty|inventory|"
-    r"availability|salesStatus|sales_status|purchasable|isPurchasable|orderable|isOrderable|"
-    r"available|isAvailable|in_stock|inStock|soldOut|sold_out"
-)
-_STOCK_RE = re.compile(r'\\*"(' + STOCK_KEYS + r')\\*"\s*:\s*\\*"?([A-Za-z_0-9.\-]{1,40})')
+# Any field whose name mentions stock / salable / sold out / inventory / availability /
+# purchasable / orderable / quantity (Adobe Commerce, Next.js payloads and JSON-LD all vary).
+_STOCK_KEY = (r"[A-Za-z_]*(?:[Ss]tock|STOCK|[Ss]alable|[Ss]old_?[Oo]ut|[Ii]nventory|[Aa]vailab|"
+              r"[Pp]urchas|[Oo]rderab|[Qq]uantity|[Qq]ty)[A-Za-z_]*")
+_STOCK_RE = re.compile(r'\\*"(' + _STOCK_KEY + r')\\*"\s*:\s*\\*"?([^"\\,}\]]{1,80})')
+# Third-party widgets on the page whose JSON isn't about the product (e.g. support chat).
+_IGNORE_HOSTS = ("quiq-api.com", "quiq.com")
 
 
 def scan_stock_fields(text: str, source: str, limit: int = 40) -> list[tuple[str, str, str]]:
@@ -203,7 +202,8 @@ def collect(page, product: dict) -> Evidence:
     def on_nintendo_response(resp):
         # Read-only: look at JSON the product page itself fetched (no extra requests made).
         try:
-            if "nintendo" not in resp.url or "json" not in (resp.headers.get("content-type") or ""):
+            if ("nintendo" not in resp.url or any(h in resp.url for h in _IGNORE_HOSTS)
+                    or "json" not in (resp.headers.get("content-type") or "")):
                 return
             short = re.sub(r"\?.*", "", resp.url)[-80:]
             ev.stock_fields.extend(scan_stock_fields(resp.text(), f"api {short}"))

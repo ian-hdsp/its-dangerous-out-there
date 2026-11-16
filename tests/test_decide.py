@@ -147,3 +147,15 @@ def test_scan_stock_fields_plain_and_escaped_json():
     assert ("api", "salable_qty", "0") in got
     assert ("page", "stockStatus", "OUT_OF_STOCK") in got
     assert ("page", "isSalable", "false") in got
+
+
+def test_scan_stock_fields_broad_names_and_url_values():
+    from check_stock import scan_stock_fields
+    text = ('{"offers":{"availability":"https://schema.org/OutOfStock"},'
+            '"isSoldOut":true,"maxOrderQuantity":2,"inventoryLevel":"NONE","name":"x"}')
+    got = {(k, v) for _, k, v in scan_stock_fields(text, "page")}
+    assert ("availability", "https://schema.org/OutOfStock") in got
+    assert ("isSoldOut", "true") in got
+    assert ("maxOrderQuantity", "2") in got
+    assert ("inventoryLevel", "NONE") in got
+    assert not any(k == "name" for k, _ in got)

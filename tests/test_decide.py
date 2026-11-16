@@ -159,3 +159,33 @@ def test_scan_stock_fields_broad_names_and_url_values():
     assert ("maxOrderQuantity", "2") in got
     assert ("inventoryLevel", "NONE") in got
     assert not any(k == "name" for k, _ in got)
+
+
+def _btn_ev(salable):
+    return Evidence(http_status=200, main_buttons=[btn("Add to cart")], salable=salable)
+
+
+def test_add_to_cart_but_not_salable_is_out_of_stock():
+    status, reason = decide(_btn_ev(False))
+    assert status == OUT_OF_STOCK and "isSalableQty=false" in reason
+
+
+def test_add_to_cart_and_salable_is_in_stock():
+    status, reason = decide(_btn_ev(True))
+    assert status == IN_STOCK and "isSalableQty=true" in reason
+
+
+def test_add_to_cart_without_live_data_still_in_stock():
+    # if Nintendo's live data isn't seen at all, fall back to the button (don't miss a drop)
+    assert decide(_btn_ev(None))[0] == IN_STOCK
+
+
+def test_find_salable_matches_this_product_not_related_items():
+    from check_stock import find_salable
+    title = "Nintendo Switch™ 2 – The Legend of Zelda™ – 40th Anniversary Edition"
+    payload = {"data": {"product": {"name": title, "isSalableQty": False,
+                                    "related": [{"name": "Pro Controller", "isSalableQty": True}]}}}
+    assert find_salable([payload], title) is False
+    payload["data"]["product"]["isSalableQty"] = True
+    assert find_salable([payload], "  " + title.upper() + " ") is True
+    assert find_salable([{"name": "Other", "isSalableQty": True}], title) is None

@@ -29,8 +29,8 @@ repo would use ~13,000 min/month (the free tier is 2,000).
 ## What to expect
 
 - **OUT_OF_STOCK** = working (reads the "Sold out" button next to the product title).
-- **Checks every minute.** GitHub's `*/5` schedule often fires 10-30+ minutes apart, longer
-  than a typical drop, so each scheduled run loops for 50 minutes checking every 60 s
+- **Checks every 30 seconds.** GitHub's `*/5` schedule often fires 10-30+ minutes apart, longer
+  than a typical drop, so each scheduled run loops for 50 minutes checking every 30 s
   (`LOOP_MINUTES`, `CHECK_INTERVAL`). The next scheduled run waits in the queue and starts
   as soon as the current one ends, so coverage is near-continuous. Manual runs check once.
 - **Pushes on a status change, plus one reminder per drop:** one **urgent** push when it

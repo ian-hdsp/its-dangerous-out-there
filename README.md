@@ -34,11 +34,11 @@ repo would use ~13,000 min/month (the free tier is 2,000).
   (`LOOP_MINUTES`, `CHECK_INTERVAL`). The next scheduled run waits in the queue and starts
   as soon as the current one ends, so coverage is near-continuous. Manual runs check once.
 - **Pushes on a status change, plus one reminder per drop:** one **urgent** push when it
-  comes in stock; if it's still in stock 10 minutes later (`REMINDER_MINUTES`), one urgent
+  comes in stock; if it's still in stock 3 minutes later (`REMINDER_MINUTES`), one urgent
   push titled **"Reminder (same drop): … still in stock — started 11:16 AM PST / 2:16 PM
   EST"** with "Not a new drop" in the body (no `in_stock` tag, so `desktop_alert.py`
   doesn't reopen the browser); then one low-priority "sold out again" push when it's gone.
-  Drops on Nov 16 lasted ~20 minutes each, so the reminder lands mid-drop. The last status
+  Drops on Nov 16 showed ~20 minutes each, but real stock seemed to go in the first minutes, so the reminder comes early. The last status
   is kept in the Actions cache (`state.json`); a one-off page failure mid-drop neither
   re-triggers the push nor resets the reminder clock. If the cache is lost, an in-stock
   result still pushes.

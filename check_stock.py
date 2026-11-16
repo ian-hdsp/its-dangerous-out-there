@@ -26,9 +26,9 @@ import requests
 
 IN_STOCK, OUT_OF_STOCK, UNKNOWN = "IN_STOCK", "OUT_OF_STOCK", "UNKNOWN"
 # One reminder per drop, this many minutes after the IN STOCK push (drops last ~20 min). 0 = off.
-REMINDER_SECS = 60 * float(os.environ.get("REMINDER_MINUTES", "10"))
+REMINDER_SECS = 60 * float(os.environ.get("REMINDER_MINUTES", "3"))
 # Checks land a fraction of a second either side of the interval; without slack, the check
-# exactly 10 min later can measure 599.9 s and the reminder slips a whole interval.
+# exactly 3 min later can measure 179.9 s and the reminder slips a whole interval.
 REMINDER_SLACK_SECS = 5
 
 # Target (TCIN 1013322047) is not checked: its bot protection refuses GitHub-hosted runners

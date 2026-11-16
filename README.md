@@ -59,7 +59,7 @@ are set. ntfy and Pushover are independent: if one fails, the other still sends.
 | Alert | Pushover priority |
 |---|---|
 | IN STOCK | **Emergency (2)**: repeats every 3 min (repo variable `PUSHOVER_RETRY_SECONDS`, min 30) until you tap *Acknowledge*, for up to 6 min (`PUSHOVER_EXPIRE_SECONDS`); stops automatically if it sells out first |
-| Reminder (same drop) | High (1): one alert |
+| Reminder (same drop) | Not sent to Pushover (the emergency repeats cover it); ntfy only |
 | Sold out again | Quiet (-1) |
 
 **More than one person (e.g. a friend):** put several User Keys in `PUSHOVER_USER`,

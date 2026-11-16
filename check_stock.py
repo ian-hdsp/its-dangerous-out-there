@@ -363,12 +363,14 @@ def pushover_users() -> list[str]:
     return [u.strip() for u in os.environ.get("PUSHOVER_USER", "").split(",") if u.strip()]
 
 
-def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str = "") -> list[str]:
+def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str = "",
+           channels: tuple[str, ...] = ("ntfy", "pushover")) -> list[str]:
     """Send one alert to every configured channel: ntfy (NTFY_TOPIC) and Pushover
     (PUSHOVER_USER + PUSHOVER_TOKEN; one message per person). Channels and people are
     independent: one failing never stops the rest, and nothing here raises. `tag` (e.g.
     "in_stock") lets desktop_alert.py tell alert types apart. Returns the Pushover emergency
-    receipts, one per person, so repeats can be cancelled when the drop ends."""
+    receipts, one per person, so repeats can be cancelled when the drop ends. `channels`
+    limits which services get this alert (e.g. the same-drop reminder is ntfy only)."""
     test = os.environ.get("TEST_RUN") == "1"
     if test:  # manual/test run: make it unmistakable on every channel
         title = "[TEST] " + title
@@ -378,12 +380,12 @@ def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str =
         print(f"[notify skipped] {title}: {body} {url}")
         return []
     receipts: list[str] = []
-    if topic:
+    if topic and "ntfy" in channels:
         try:
             _notify_ntfy(topic, title, body, url, priority, tag, test)
         except Exception as e:
             print(f"  ntfy push failed: {e}", flush=True)
-    if po_token:
+    if po_token and "pushover" in channels:
         # A separate message per person, so each acknowledges their own emergency alert
         # (with one shared message, the first person to acknowledge stops it for everyone).
         for i, user in enumerate(po_users, 1):
@@ -547,7 +549,8 @@ def send_alerts(results, state: dict, notify_unknown: bool) -> None:
                 notify(f"Reminder (same drop): Zelda Switch 2 still in stock at {prod['retailer']}"
                        f" - started {drop_started_label(since)}",
                        f"Not a new drop. In stock for {mins} min so far. Tap to open.",
-                       prod["url"], tag="repeat")
+                       prod["url"], tag="repeat",
+                       channels=("ntfy",))  # Pushover's emergency repeats already cover this
             elif alert == "sold_out":
                 # stop repeats for anyone who hasn't acknowledged (old state used a single key)
                 cancel_pushover(entry.pop("pushover_receipts", None) or entry.pop("pushover_receipt", None))

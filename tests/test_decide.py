@@ -465,3 +465,30 @@ def test_pushover_expire_is_configurable_and_bounded(monkeypatch):
         monkeypatch.setenv("PUSHOVER_EXPIRE_SECONDS", v)
         c.notify("t", "b", "u", tag="in_stock")
     assert [x["data"]["expire"] for x in calls] == [600, 180, 10800]
+
+
+def test_reminder_goes_to_ntfy_only(monkeypatch):
+    import check_stock as c
+    _pushover_env(monkeypatch)            # both ntfy and Pushover configured
+    calls = _capture_posts(monkeypatch)
+    prod = {"retailer": "Nintendo Store", "url": "u"}
+    state = {"Nintendo Store": {"status": IN_STOCK, "known": IN_STOCK,
+                                "since": 1794856586.0, "reminded": False}}
+    monkeypatch.setattr(c.time, "time", lambda: 1794856586.0 + c.REMINDER_SECS)
+    c.send_alerts([(prod, IN_STOCK, "buy button")], state, False)
+    assert state["Nintendo Store"]["reminded"] is True
+    assert any("ntfy" in x["url"] for x in calls)
+    assert not any("pushover" in x["url"] for x in calls)
+
+
+def test_in_stock_and_sold_out_still_go_to_both_channels(monkeypatch):
+    import check_stock as c
+    _pushover_env(monkeypatch)
+    calls = _capture_posts(monkeypatch)
+    prod = {"retailer": "Nintendo Store", "url": "u"}
+    state = {}
+    for s in (OUT_OF_STOCK, IN_STOCK, OUT_OF_STOCK):
+        c.send_alerts([(prod, s, "r")], state, False)
+    urls = [x["url"] for x in calls]
+    assert sum("ntfy" in u for u in urls) == 2                      # IN STOCK + sold out
+    assert sum(u.endswith("/messages.json") for u in urls) == 2     # IN STOCK + sold out

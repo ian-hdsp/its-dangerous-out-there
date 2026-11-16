@@ -81,3 +81,20 @@ pip install -r requirements.txt pytest && python -m playwright install chromium
 DRY_RUN=1 python check_stock.py
 PYTHONPATH=. pytest -q tests
 ```
+
+### Drop simulation (end to end, ~4 min)
+
+`tools/simulate_drop.py` runs the real check loop in headless Chromium against a local mock
+of the product page that switches from "Sold out" to "Add to cart" and back, with a mock
+ntfy server timing each push. It never touches the real store or your real topic. It
+passes if there is exactly one urgent IN STOCK push and one "sold out again" push, each
+within one check interval (+ check time) of the page change.
+
+```
+python tools/simulate_drop.py                            # current settings (60 s checks)
+python tools/simulate_drop.py --interval 30 --minutes 2.5   # quicker
+```
+
+With the current settings the IN STOCK push typically arrives ~30 s after the page changes
+(worst case ~66 s). For the Nov 16 drop, the old every-5-minutes schedule pushed ~5 min
+after the page changed (up to 10 min); its average across 100 runs was ~8.5 min.

@@ -2,11 +2,11 @@ name: Zelda Switch 2 stock check
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # keeps a run queued; each run itself checks every minute (see LOOP_MINUTES)
+    - cron: "*/5 * * * *"   # keeps a run queued; each run itself checks every 30 s (see LOOP_MINUTES)
   workflow_dispatch:         # "Run workflow" button for manual tests
     inputs:
       loop_minutes:
-        description: "Minutes to keep checking every 60 s (0 = check once)"
+        description: "Minutes to keep checking every 30 s (0 = check once)"
         default: "0"
       send_test_push:
         description: "Send one [TEST] push in the IN STOCK format (checks GitHub -> ntfy -> phone)"
@@ -74,7 +74,7 @@ jobs:
           DEBUG: ${{ env.LIVE != 'true' && '1' || '' }}  # verbose log on test runs
           # Scheduled runs: check every CHECK_INTERVAL s for 50 min. Manual runs: one check.
           LOOP_MINUTES: ${{ github.event_name == 'schedule' && '50' || inputs.loop_minutes || '0' }}
-          CHECK_INTERVAL: "60"
+          CHECK_INTERVAL: "30"   # seconds between checks (code minimum is 30: polite to the store)
           TEST_RUN: ${{ env.LIVE != 'true' && '1' || '' }}  # label pushes "[TEST]"
           SEND_TEST_PUSH: ${{ env.LIVE != 'true' && inputs.send_test_push && '1' || '' }}
           DROP_LOG: ${{ env.LIVE == 'true' && 'drops.csv' || '' }}  # test runs never log drops

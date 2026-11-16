@@ -33,11 +33,15 @@ repo would use ~13,000 min/month (the free tier is 2,000).
   than a typical drop, so each scheduled run loops for 50 minutes checking every 60 s
   (`LOOP_MINUTES`, `CHECK_INTERVAL`). The next scheduled run waits in the queue and starts
   as soon as the current one ends, so coverage is near-continuous. Manual runs check once.
-- **Pushes only on a status change**, however often it checks: one **urgent** push when it
-  comes in stock, one low-priority "sold out again" push when it's gone, nothing in
-  between. The last status is kept in the Actions cache (`state.json`); a one-off page
-  failure mid-drop doesn't re-trigger the push. If the cache is lost, an in-stock result
-  still pushes.
+- **Pushes on a status change, plus one reminder per drop:** one **urgent** push when it
+  comes in stock; if it's still in stock 10 minutes later (`REMINDER_MINUTES`), one urgent
+  push titled **"Reminder (same drop): … still in stock — started 11:16 AM PST / 2:16 PM
+  EST"** with "Not a new drop" in the body (no `in_stock` tag, so `desktop_alert.py`
+  doesn't reopen the browser); then one low-priority "sold out again" push when it's gone.
+  Drops on Nov 16 lasted ~20 minutes each, so the reminder lands mid-drop. The last status
+  is kept in the Actions cache (`state.json`); a one-off page failure mid-drop neither
+  re-triggers the push nor resets the reminder clock. If the cache is lost, an in-stock
+  result still pushes.
 - **False-positive filter:** Nintendo's page can show "Add to cart" from a stale cache while
   the cart says "The requested quantity is not available" (seen Nov 16). The page also loads
   the store's live data from `graph.nintendo.com`, which includes `isSalableQty` for the

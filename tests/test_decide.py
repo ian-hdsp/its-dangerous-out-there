@@ -195,7 +195,7 @@ def test_find_salable_matches_this_product_not_related_items():
 def test_send_test_push_is_always_labelled(monkeypatch):
     import check_stock as c
     sent = []
-    monkeypatch.setattr(c, "notify", lambda title, body, url, priority="urgent", tag="":
+    monkeypatch.setattr(c, "notify", lambda title, body, url, priority="urgent", tag="", **kw:
                         sent.append((os.environ.get("TEST_RUN"), title, tag)))
     monkeypatch.setenv("SEND_TEST_PUSH", "1")
     monkeypatch.delenv("TEST_RUN", raising=False)
@@ -254,7 +254,7 @@ def test_reminders_off_when_zero():
 def test_reminder_push_is_labelled_as_same_drop(monkeypatch):
     import check_stock as c
     sent = []
-    monkeypatch.setattr(c, "notify", lambda title, body, url, priority="urgent", tag="":
+    monkeypatch.setattr(c, "notify", lambda title, body, url, priority="urgent", tag="", **kw:
                         sent.append((title, body, priority, tag)))
     prod = {"retailer": "Nintendo Store", "url": "u"}
     state = {"Nintendo Store": {"status": IN_STOCK, "known": IN_STOCK,

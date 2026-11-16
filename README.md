@@ -20,6 +20,8 @@ Product: <https://www.nintendo.com/us/store/products/nintendo-switch-2-the-legen
    **Manual runs are test runs:** any push they send is titled `[TEST] …` with a 🧪 tag,
    they keep their own saved status (so they never affect real alerts), and
    `desktop_alert.py` ignores them. Set `loop_minutes` to test the every-minute loop.
+   To cover a gap in the schedule for real, run it with `mode: live` and `loop_minutes: 50`:
+   that behaves exactly like a scheduled run (real pushes, shared status).
 
 The repo must stay **public**: Actions minutes are free for public repos, while a private
 repo would use ~13,000 min/month (the free tier is 2,000).

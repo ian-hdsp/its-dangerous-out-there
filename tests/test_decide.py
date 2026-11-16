@@ -216,3 +216,58 @@ def test_send_test_push_is_always_labelled(monkeypatch):
     except Stop:
         pass
     assert sent and sent[0][0] == "1" and sent[0][2] == "in_stock"
+
+
+def _seq_with_time(steps, reminder_secs=600):
+    """steps: [(seconds, status)] -> alerts, with reminders after reminder_secs."""
+    state, alerts = {}, []
+    for t, s in steps:
+        alert, state = transition(state, s, False, now=t, reminder_secs=reminder_secs)
+        alerts.append(alert)
+    return alerts
+
+
+def test_one_reminder_per_drop_after_ten_minutes():
+    steps = [(0, OUT_OF_STOCK)] + [(60 * m, IN_STOCK) for m in range(1, 21)] + [(1260, OUT_OF_STOCK)]
+    alerts = _seq_with_time(steps)
+    assert alerts[1] == "in_stock"                       # minute 1: drop starts
+    assert [i for i, a in enumerate(alerts) if a == "reminder"] == [11]  # minute 11 = 10 min later
+    assert alerts.count("reminder") == 1 and alerts[-1] == "sold_out"
+
+
+def test_next_drop_gets_its_own_reminder():
+    steps = ([(0, IN_STOCK), (600, IN_STOCK), (660, OUT_OF_STOCK),
+              (3600, IN_STOCK), (4200, IN_STOCK)])
+    assert _seq_with_time(steps) == ["in_stock", "reminder", "sold_out", "in_stock", "reminder"]
+
+
+def test_short_drop_gets_no_reminder_and_unknown_blip_keeps_clock():
+    assert _seq_with_time([(0, IN_STOCK), (300, OUT_OF_STOCK)]) == ["in_stock", "sold_out"]
+    # a failed page load mid-drop neither re-alerts nor resets the 10-minute clock
+    assert _seq_with_time([(0, IN_STOCK), (300, UNKNOWN), (600, IN_STOCK)]) == ["in_stock", None, "reminder"]
+
+
+def test_reminders_off_when_zero():
+    assert _seq_with_time([(0, IN_STOCK), (3600, IN_STOCK)], reminder_secs=0) == ["in_stock", None]
+
+
+def test_reminder_push_is_labelled_as_same_drop(monkeypatch):
+    import check_stock as c
+    sent = []
+    monkeypatch.setattr(c, "notify", lambda title, body, url, priority="urgent", tag="":
+                        sent.append((title, body, priority, tag)))
+    prod = {"retailer": "Nintendo Store", "url": "u"}
+    state = {"Nintendo Store": {"status": IN_STOCK, "known": IN_STOCK,
+                                "since": 1763320586.0, "reminded": False}}  # 2025-11-16 19:16:26 UTC
+    monkeypatch.setattr(c.time, "time", lambda: 1763320586.0 + 600)
+    c.send_alerts([(prod, IN_STOCK, "buy button")], state, False)
+    title, body, priority, tag = sent[0]
+    assert title.startswith("Reminder (same drop)") and "IN STOCK" not in title
+    assert "11:16 AM PST / 2:16 PM EST" in title and "Not a new drop" in body
+    assert priority == "urgent" and tag == "repeat"
+
+
+def test_reminder_not_lost_to_check_jitter():
+    # the check 10 intervals later finishes 0.1 s "early": still gets the reminder
+    steps = [(100.0, IN_STOCK), (100.0 + 599.9, IN_STOCK)]
+    assert _seq_with_time(steps) == ["in_stock", "reminder"]

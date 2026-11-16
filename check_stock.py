@@ -12,16 +12,23 @@ Env vars:
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
 import sys
 import time
 from dataclasses import dataclass, field
+from zoneinfo import ZoneInfo
 
 import requests
 
 IN_STOCK, OUT_OF_STOCK, UNKNOWN = "IN_STOCK", "OUT_OF_STOCK", "UNKNOWN"
+# One reminder per drop, this many minutes after the IN STOCK push (drops last ~20 min). 0 = off.
+REMINDER_SECS = 60 * float(os.environ.get("REMINDER_MINUTES", "10"))
+# Checks land a fraction of a second either side of the interval; without slack, the check
+# exactly 10 min later can measure 599.9 s and the reminder slips a whole interval.
+REMINDER_SLACK_SECS = 5
 
 # Target (TCIN 1013322047) is not checked: its bot protection refuses GitHub-hosted runners
 # (stock API returns HTTP 435), so it can only ever report UNKNOWN from here. Target is covered
@@ -396,11 +403,21 @@ def check_once(ctx) -> list[tuple[dict, str, str]]:
 def send_alerts(results, state: dict, notify_unknown: bool) -> None:
     for prod, status, reason in results:
         prev = state.get(prod["retailer"], {})
-        alert, state[prod["retailer"]] = transition(prev, status, notify_unknown)
+        now = time.time()
+        alert, state[prod["retailer"]] = transition(prev, status, notify_unknown, now, REMINDER_SECS)
         try:
             if alert == "in_stock":
                 notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})",
                        prod["url"], tag="in_stock")
+            elif alert == "reminder":
+                # Same drop, not a new one: says so in the title, with when the drop started.
+                # No "in_stock" tag, so desktop_alert.py doesn't reopen the browser.
+                since = state[prod["retailer"]]["since"]
+                mins = round((now - since) / 60)
+                notify(f"Reminder (same drop): Zelda Switch 2 still in stock at {prod['retailer']}"
+                       f" - started {drop_started_label(since)}",
+                       f"Not a new drop. In stock for {mins} min so far. Tap to open.",
+                       prod["url"], tag="repeat")
             elif alert == "sold_out":
                 notify(f"Zelda Switch 2 sold out again at {prod['retailer']}", reason, prod["url"], priority="low")
             elif alert == "unknown":
@@ -472,23 +489,46 @@ def save_state(path: str, state: dict) -> None:
         json.dump(state, f)
 
 
-def transition(prev: dict, status: str, notify_unknown: bool = False) -> tuple[str | None, dict]:
-    """Push only on a status change, however often checks run; return (alert, new_state).
+def transition(prev: dict, status: str, notify_unknown: bool = False,
+               now: float = 0.0, reminder_secs: float = 0.0) -> tuple[str | None, dict]:
+    """Push on a status change, plus one reminder per drop; return (alert, new_state).
 
     `known` remembers the last non-UNKNOWN status, so a page that briefly fails to load
     mid-drop (IN_STOCK -> UNKNOWN -> IN_STOCK) doesn't trigger a second "IN STOCK" push.
+    `since` is when the current drop was first seen; once `reminder_secs` have passed while
+    still in stock, a single "reminder" goes out (`reminded` stops a second one). Both reset
+    when it sells out. reminder_secs <= 0 turns reminders off.
     With no previous state, an IN_STOCK result still alerts (better a duplicate than a miss).
     """
     known_prev = prev.get("known")
     known = known_prev if status == UNKNOWN else status
+    since, reminded = prev.get("since"), prev.get("reminded", False)
     alert = None
     if status == IN_STOCK and known_prev != IN_STOCK:
         alert = "in_stock"
+        since, reminded = now, False
+    elif (status == IN_STOCK and reminder_secs > 0 and not reminded
+          and since is not None and now - since >= reminder_secs - REMINDER_SLACK_SECS):
+        alert = "reminder"
+        reminded = True
     elif status == OUT_OF_STOCK and known_prev == IN_STOCK:
         alert = "sold_out"
     elif status == UNKNOWN and prev.get("status") != UNKNOWN and notify_unknown:
         alert = "unknown"
-    return alert, {"status": status, "known": known}
+    if status == OUT_OF_STOCK:
+        since, reminded = None, False
+    return alert, {"status": status, "known": known, "since": since, "reminded": reminded}
+
+
+def drop_started_label(since: float) -> str:
+    """'11:16 AM PST / 2:16 PM EST' for when the drop was first seen (handles PDT/EDT too)."""
+    utc = datetime.datetime.fromtimestamp(since, datetime.timezone.utc)
+
+    def fmt(zone: str) -> str:
+        local = utc.astimezone(ZoneInfo(zone))
+        return f"{local.hour % 12 or 12}:{local:%M %p %Z}"
+
+    return f"{fmt('America/Los_Angeles')} / {fmt('America/New_York')}"
 
 
 if __name__ == "__main__":

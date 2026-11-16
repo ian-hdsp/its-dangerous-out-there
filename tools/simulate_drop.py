@@ -6,11 +6,13 @@ Timeline of the mock page (it also mimics Nintendo's live store data, isSalableQ
   "Sold out"  ->  --phantom-at: "Add to cart" but isSalableQty=false (the stale-cache false
   positive where the cart says "The requested quantity is not available")  ->  --in-at:
   "Add to cart" and isSalableQty=true (really buyable)  ->  --out-at: "Sold out" again.
+The drop lasts long enough for the one-per-drop reminder (--reminder-minutes after the push).
 Nothing touches the real store or your real ntfy topic.
 
 Pass/fail (exit code 1 on failure):
   - no push during the phantom phase
-  - exactly one urgent IN STOCK push and one low-priority "sold out again" push
+  - exactly one urgent IN STOCK push, one "Reminder (same drop)" push, and one low-priority
+    "sold out again" push
   - each push arrives within one check interval + check time (+ slack) of the page change
 
 Usage (needs Playwright + Chromium: pip install -r requirements.txt && python -m playwright install chromium):
@@ -48,7 +50,7 @@ def page_html(button_buyable: bool) -> str:
 
 
 def run(interval: float, minutes: float, phantom_at: float, in_at: float, out_at: float,
-        page_delay: float) -> int:
+        page_delay: float, reminder_minutes: float) -> int:
     t0 = [0.0]
     pushes: list[tuple[float, str, str]] = []
 
@@ -92,12 +94,14 @@ def run(interval: float, minutes: float, phantom_at: float, in_at: float, out_at
     os.environ.update(
         NTFY_TOPIC="simulation", NTFY_SERVER=f"http://127.0.0.1:{ntfy_port}", STATE_FILE=state,
         LOOP_MINUTES=str(minutes), CHECK_INTERVAL=str(int(interval)),
+        REMINDER_MINUTES=str(reminder_minutes),
         NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost",
     )
     for k in ("DRY_RUN", "TEST_RUN", "DEBUG", "NOTIFY_ON_UNKNOWN", "GITHUB_STEP_SUMMARY"):
         os.environ.pop(k, None)
 
     import check_stock
+    check_stock.REMINDER_SECS = 60 * reminder_minutes
 
     check_stock.PRODUCTS = [{"retailer": "Nintendo Store", "url": f"http://127.0.0.1:{store_port}/product",
                              "live_api": f"127.0.0.1:{store_port}/graph"}]
@@ -115,9 +119,14 @@ def run(interval: float, minutes: float, phantom_at: float, in_at: float, out_at
     if early:
         failures.append(f"pushed during the phantom 'Add to cart' phase: {early}")
     in_pushes = [p for p in pushes if "IN STOCK" in p[1]]
+    reminders = [p for p in pushes if p[1].startswith("Reminder (same drop)")]
+    if len(reminders) != 1:
+        failures.append(f"expected 1 'Reminder (same drop)' push, got {len(reminders)}")
+    elif not (in_at + reminder_minutes * 60 <= reminders[0][0] < out_at + limit):
+        failures.append(f"reminder at t={reminders[0][0]:.0f}s, outside the drop / before the reminder time")
     out_pushes = [p for p in pushes if "sold out" in p[1]]
     for t, title, prio in pushes:
-        ref = in_at if "IN STOCK" in title else out_at
+        ref = in_at if ("IN STOCK" in title or title.startswith("Reminder")) else out_at
         print(f"t={t:6.1f}s  [{prio:6}] {title}  -> {t - ref:.1f} s after the page changed")
     if len(in_pushes) != 1:
         failures.append(f"expected 1 IN STOCK push, got {len(in_pushes)}")
@@ -129,20 +138,22 @@ def run(interval: float, minutes: float, phantom_at: float, in_at: float, out_at
         failures.append(f"expected 1 'sold out again' push, got {len(out_pushes)}")
     elif out_pushes[0][0] - out_at > limit:
         failures.append(f"sold-out push took {out_pushes[0][0] - out_at:.1f}s (limit {limit:.0f}s)")
-    if len(pushes) != 2:
-        failures.append(f"expected exactly 2 pushes in total, got {len(pushes)}")
+    if len(pushes) != 3:
+        failures.append(f"expected exactly 3 pushes in total, got {len(pushes)}")
 
     if failures:
         print("\nFAIL:\n  " + "\n  ".join(failures))
         return 1
-    print(f"\nPASS: 2 pushes, each within {limit:.0f} s of the page change")
+    print(f"\nPASS: IN STOCK + 1 reminder + sold-out pushes; changes pushed within {limit:.0f} s")
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--interval", type=float, default=60, help="seconds between checks (min 30; default 60)")
-    ap.add_argument("--minutes", type=float, default=4, help="how long the loop runs (default 4)")
+    ap.add_argument("--minutes", type=float, default=5, help="how long the loop runs (default 5)")
+    ap.add_argument("--reminder-minutes", type=float, default=1,
+                    help="reminder delay for the simulation (default 1; the live default is 10)")
     ap.add_argument("--phantom-at", type=float, help="seconds until 'Add to cart' shows while not "
                     "salable (default: 0.6 intervals)")
     ap.add_argument("--in-at", type=float, help="seconds until it's really buyable "
@@ -153,10 +164,10 @@ def main() -> int:
     interval = max(30.0, a.interval)  # check_stock enforces the same floor
     phantom_at = a.phantom_at if a.phantom_at is not None else 0.6 * interval
     in_at = a.in_at if a.in_at is not None else 1.6 * interval
-    out_at = a.out_at if a.out_at is not None else 2.5 * interval
+    out_at = a.out_at if a.out_at is not None else 3.5 * interval
     if not (0 < phantom_at < in_at < out_at < a.minutes * 60 - interval):
         ap.error("need 0 < --phantom-at < --in-at < --out-at, with a check after --out-at before the loop ends")
-    return run(interval, a.minutes, phantom_at, in_at, out_at, a.page_delay)
+    return run(interval, a.minutes, phantom_at, in_at, out_at, a.page_delay, a.reminder_minutes)
 
 
 if __name__ == "__main__":

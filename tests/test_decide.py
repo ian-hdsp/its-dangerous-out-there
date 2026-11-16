@@ -361,7 +361,7 @@ def test_in_stock_goes_to_both_channels_as_emergency(monkeypatch):
     receipt = c.notify("Zelda Switch 2 IN STOCK at Nintendo Store", "Tap", "https://p", tag="in_stock")
     assert receipt == ["R123"]
     po = [x for x in calls if "pushover" in x["url"]][0]["data"]
-    assert po["priority"] == 2 and po["retry"] == 180 and po["expire"] == 1200
+    assert po["priority"] == 2 and po["retry"] == 180 and po["expire"] == 360
     assert po["url"] == "https://p" and po["title"] == "Zelda Switch 2 IN STOCK at Nintendo Store"
     assert any("ntfy" in x["url"] for x in calls)
 
@@ -455,3 +455,13 @@ def test_pushover_retry_interval_is_configurable(monkeypatch):
     monkeypatch.setenv("PUSHOVER_RETRY_SECONDS", "5")   # below Pushover's minimum -> 30
     c.notify("t", "b", "u", tag="in_stock")
     assert [x["data"]["retry"] for x in calls] == [300, 30]
+
+
+def test_pushover_expire_is_configurable_and_bounded(monkeypatch):
+    import check_stock as c
+    _pushover_env(monkeypatch, ntfy=False)
+    calls = _capture_posts(monkeypatch)
+    for v in ("600", "10", "99999"):   # custom; below retry -> retry; above Pushover max -> 10800
+        monkeypatch.setenv("PUSHOVER_EXPIRE_SECONDS", v)
+        c.notify("t", "b", "u", tag="in_stock")
+    assert [x["data"]["expire"] for x in calls] == [600, 180, 10800]

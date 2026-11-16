@@ -66,6 +66,8 @@ jobs:
       - name: Check stock
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}     # optional second channel
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
           NOTIFY_ON_UNKNOWN: ${{ vars.NOTIFY_ON_UNKNOWN }}
           DEBUG: ${{ env.LIVE != 'true' && '1' || '' }}  # verbose log on test runs
           # Scheduled runs: check every CHECK_INTERVAL s for 50 min. Manual runs: one check.

@@ -51,6 +51,23 @@ repo would use ~13,000 min/month (the free tier is 2,000).
   alone rather than risk missing a drop. Each check's log line shows the live value.
 - GitHub disables scheduled workflows after 60 days with no repo commits.
 
+## Pushover (optional second channel, recommended on iPhone)
+
+Alerts also go to **Pushover** when the repo secrets `PUSHOVER_USER` and `PUSHOVER_TOKEN`
+are set. ntfy and Pushover are independent: if one fails, the other still sends.
+
+| Alert | Pushover priority |
+|---|---|
+| IN STOCK | **Emergency (2)**: repeats every 60 s until you tap *Acknowledge*, for up to 20 min; stops automatically if it sells out first |
+| Reminder (same drop) | High (1): one alert |
+| Sold out again | Quiet (-1) |
+
+Setup: install Pushover, turn on **Settings → Critical Alerts** in the app (emergency alerts
+then sound even on silent / in Focus), copy **Your User Key** from pushover.net, create an
+application there for an **API Token**, and add both as repo secrets. Test it with a manual
+run (`mode: test`, `send_test_push: true`): a `[TEST]` emergency alert that repeats for up to
+3 minutes unless acknowledged.
+
 ## Check out faster
 
 The watcher never buys anything; these just get you to "Add to cart" sooner.

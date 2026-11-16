@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 
 import requests
@@ -246,49 +247,73 @@ def notify(title: str, body: str, url: str, priority: str = "urgent") -> None:
     ).raise_for_status()
 
 
+def check_once(ctx) -> list[tuple[dict, str, str]]:
+    results = []
+    for product in PRODUCTS:
+        page = ctx.new_page()
+        try:
+            status, reason = decide(collect(page, product))
+        except Exception as e:  # timeouts, navigation errors
+            status, reason = UNKNOWN, f"error: {type(e).__name__}: {e}"[:200]
+        finally:
+            page.close()
+        results.append((product, status, reason))
+        print(f"{time.strftime('%H:%M:%S')} {product['retailer']:15} {status:12} {reason}", flush=True)
+    return results
+
+
+def send_alerts(results, state: dict, notify_unknown: bool) -> None:
+    for prod, status, reason in results:
+        prev = state.get(prod["retailer"], {})
+        alert, state[prod["retailer"]] = transition(prev, status, notify_unknown)
+        try:
+            if alert == "in_stock":
+                notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})", prod["url"])
+            elif alert == "sold_out":
+                notify(f"Zelda Switch 2 sold out again at {prod['retailer']}", reason, prod["url"], priority="low")
+            elif alert == "unknown":
+                notify(f"Stock check couldn't read {prod['retailer']}", reason, prod["url"], priority="low")
+        except Exception as e:  # a failed push must not stop the watch loop
+            print(f"  push failed: {e}", flush=True)
+        if alert:
+            print(f"  alert={alert}", flush=True)
+
+
 def main() -> int:
+    """Check every CHECK_INTERVAL seconds until LOOP_MINUTES have passed (0 = check once).
+
+    GitHub's */5 cron often fires 10-30+ min apart, which is longer than a typical drop.
+    Looping inside the job, with the next scheduled run queued behind it, keeps coverage
+    near-continuous no matter how late the schedule fires.
+    """
     from playwright.sync_api import sync_playwright
 
-    results = []
+    interval = max(30, int(os.environ.get("CHECK_INTERVAL", "60")))  # floor: be polite to the store
+    deadline = time.time() + 60 * float(os.environ.get("LOOP_MINUTES", "0"))
+    state_path = os.environ.get("STATE_FILE", "state.json")
+    state = load_state(state_path)
+    notify_unknown = os.environ.get("NOTIFY_ON_UNKNOWN") == "1"
+    checks = 0
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx = browser.new_context(user_agent=USER_AGENT, locale="en-US", viewport={"width": 1366, "height": 900})
-        for product in PRODUCTS:
-            page = ctx.new_page()
-            try:
-                status, reason = decide(collect(page, product))
-            except Exception as e:  # timeouts, navigation errors
-                status, reason = UNKNOWN, f"error: {type(e).__name__}: {e}"[:200]
-            finally:
-                page.close()
-            results.append((product, status, reason))
-            print(f"{product['retailer']:15} {status:12} {reason}")
+        while True:
+            started = time.time()
+            results = check_once(ctx)
+            checks += 1
+            send_alerts(results, state, notify_unknown)
+            save_state(state_path, state)
+            if started + interval >= deadline:
+                break
+            time.sleep(max(0, started + interval - time.time()))
         browser.close()
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as f:
-            f.write("| Retailer | Status | Reason |\n|---|---|---|\n")
+            f.write(f"{checks} check(s); last result:\n\n| Retailer | Status | Reason |\n|---|---|---|\n")
             for prod, status, reason in results:
                 f.write(f"| [{prod['retailer']}]({prod['url']}) | {status} | {reason} |\n")
-
-    state_path = os.environ.get("STATE_FILE", "state.json")
-    state = load_state(state_path)
-    notify_unknown = os.environ.get("NOTIFY_ON_UNKNOWN") == "1"
-    for prod, status, reason in results:
-        prev = state.get(prod["retailer"], {})
-        alert, state[prod["retailer"]] = transition(prev, status, notify_unknown)
-        if alert == "in_stock":
-            notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})", prod["url"])
-        elif alert == "reminder":
-            notify(f"Reminder: Zelda Switch 2 STILL in stock at {prod['retailer']}",
-                   f"Tap to open. ({reason})", prod["url"])
-        elif alert == "sold_out":
-            notify(f"Zelda Switch 2 sold out again at {prod['retailer']}", reason, prod["url"], priority="low")
-        elif alert == "unknown":
-            notify(f"Stock check couldn't read {prod['retailer']}", reason, prod["url"], priority="low")
-        print(f"  state: {prev or 'none'} -> {state[prod['retailer']]}, alert={alert}")
-    save_state(state_path, state)
     return 0
 
 
@@ -307,10 +332,10 @@ def save_state(path: str, state: dict) -> None:
 
 
 def transition(prev: dict, status: str, notify_unknown: bool = False) -> tuple[str | None, dict]:
-    """Decide which push (if any) a status change deserves; return (alert, new_state).
+    """Push only on a status change, however often checks run; return (alert, new_state).
 
     `known` remembers the last non-UNKNOWN status, so a page that briefly fails to load
-    mid-drop (IN_STOCK -> UNKNOWN -> IN_STOCK) doesn't trigger a second urgent push.
+    mid-drop (IN_STOCK -> UNKNOWN -> IN_STOCK) doesn't trigger a second "IN STOCK" push.
     With no previous state, an IN_STOCK result still alerts (better a duplicate than a miss).
     """
     known_prev = prev.get("known")
@@ -318,8 +343,6 @@ def transition(prev: dict, status: str, notify_unknown: bool = False) -> tuple[s
     alert = None
     if status == IN_STOCK and known_prev != IN_STOCK:
         alert = "in_stock"
-    elif status == IN_STOCK:
-        alert = "reminder"  # still in stock: nudge again every run (~5 min) until it sells out
     elif status == OUT_OF_STOCK and known_prev == IN_STOCK:
         alert = "sold_out"
     elif status == UNKNOWN and prev.get("status") != UNKNOWN and notify_unknown:

@@ -2,7 +2,7 @@ name: Zelda Switch 2 stock check
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # GitHub's minimum; runs are often a few minutes late
+    - cron: "*/5 * * * *"   # keeps a run queued; each run itself checks every minute (see LOOP_MINUTES)
   workflow_dispatch:         # "Run workflow" button for manual tests
 
 concurrency:
@@ -15,7 +15,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 58   # scheduled runs loop for 50 min; the queued next run starts as this one ends
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +49,9 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NOTIFY_ON_UNKNOWN: ${{ vars.NOTIFY_ON_UNKNOWN }}
           DEBUG: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}  # verbose log on manual runs
+          # Scheduled runs: check every CHECK_INTERVAL s for 50 min. Manual runs: one check.
+          LOOP_MINUTES: ${{ github.event_name == 'schedule' && '50' || '0' }}
+          CHECK_INTERVAL: "60"
         run: python check_stock.py
 
       - name: Save status

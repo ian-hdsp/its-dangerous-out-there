@@ -24,12 +24,18 @@ repo would use ~13,000 min/month (the free tier is 2,000).
 ## What to expect
 
 - **OUT_OF_STOCK** = working (reads the "Sold out" button next to the product title).
-- Pushes: one **urgent** push when it comes in stock, then an urgent "still in
-  stock" reminder on every run (~5 min) while it lasts, and one low-priority "sold out
-  again" push when it's gone. Nothing while it stays sold out. The last status is kept in
-  the Actions cache (`state.json`); a one-off page failure mid-drop doesn't re-trigger the
-  urgent push. If the cache is ever lost, an in-stock result still pushes.
-- GitHub's `*/5` schedule is best-effort; runs can be 5–15+ min late at busy times.
+- **Checks every minute.** GitHub's `*/5` schedule often fires 10-30+ minutes apart, longer
+  than a typical drop, so each scheduled run loops for 50 minutes checking every 60 s
+  (`LOOP_MINUTES`, `CHECK_INTERVAL`). The next scheduled run waits in the queue and starts
+  as soon as the current one ends, so coverage is near-continuous. Manual runs check once.
+- **Pushes only on a status change**, however often it checks: one **urgent** push when it
+  comes in stock, one low-priority "sold out again" push when it's gone, nothing in
+  between. The last status is kept in the Actions cache (`state.json`); a one-off page
+  failure mid-drop doesn't re-trigger the push. If the cache is lost, an in-stock result
+  still pushes.
+- The watcher reads the product page. Nintendo's page can show "Add to cart" while the
+  cart still says "quantity not available" (seen Nov 16), so a push means "go try now",
+  not a guaranteed purchase.
 - GitHub disables scheduled workflows after 60 days with no repo commits.
 
 ## Why not Target?

@@ -206,7 +206,13 @@ def collect(page, product: dict) -> Evidence:
                     or "json" not in (resp.headers.get("content-type") or "")):
                 return
             short = re.sub(r"\?.*", "", resp.url)[-80:]
-            ev.stock_fields.extend(scan_stock_fields(resp.text(), f"api {short}"))
+            body = resp.text()
+            ev.stock_fields.extend(scan_stock_fields(body, f"api {short}"))
+            if os.environ.get("DEBUG") == "1" and "graph.nintendo.com" in resp.url:
+                req = (resp.request.post_data or "")[:600]
+                print(f"  [debug] graph request: {req!r}", flush=True)
+                for m in re.finditer(r"isSalableQty", body):
+                    print(f"  [debug] graph ...{body[max(0, m.start() - 700):m.start() + 120]!r}", flush=True)
         except Exception:
             pass
 

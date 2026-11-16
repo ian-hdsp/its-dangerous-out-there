@@ -278,8 +278,23 @@ def collect(page, product: dict) -> Evidence:
             if os.environ.get("DEBUG") == "1" and "graph.nintendo.com" in resp.url:
                 req = (resp.request.post_data or "")[:600]
                 print(f"  [debug] graph request: {req!r}", flush=True)
-                for m in re.finditer(r"isSalableQty", body):
-                    print(f"  [debug] graph ...{body[max(0, m.start() - 700):m.start() + 120]!r}", flush=True)
+                print(f"  [debug] graph url: {resp.url[:400]}", flush=True)
+                try:  # full record(s) that carry isSalableQty: every field, to find a stricter signal
+                    def walk(o):
+                        if isinstance(o, dict):
+                            if "isSalableQty" in o:
+                                flat = {k: v for k, v in o.items()
+                                        if not isinstance(v, (dict, list)) or k in ("variants", "prices", "price")}
+                                print(f"  [debug] product record: {json.dumps(flat)[:6000]}", flush=True)
+                                print(f"  [debug] nested keys: {[k for k, v in o.items() if isinstance(v, (dict, list))]}", flush=True)
+                            for v in o.values():
+                                walk(v)
+                        elif isinstance(o, list):
+                            for v in o:
+                                walk(v)
+                    walk(resp.json())
+                except Exception as e:
+                    print(f"  [debug] dump failed: {e}", flush=True)
         except Exception:
             pass
 

@@ -65,6 +65,10 @@ class Evidence:
     jsonld_availability: list[str] = field(default_factory=list)
     target_api_status: list[str] = field(default_factory=list)
     api_http_errors: list[int] = field(default_factory=list)  # Target API calls that were refused
+    # Stock-related fields seen in data the Nintendo page loads/embeds: (source, key, value).
+    # Recorded to learn which field (if any) shows the real stock when the button says
+    # "Add to cart" but the cart says "The requested quantity is not available".
+    stock_fields: list[tuple[str, str, str]] = field(default_factory=list)
     main_buttons: list[dict] = field(default_factory=list)  # {"text": str, "disabled": bool}
     price: str | None = None
 
@@ -146,8 +150,32 @@ PAGE_JS = r"""
 """
 
 
+# Field names that commonly carry real stock on Adobe Commerce (Magento) / headless storefronts.
+STOCK_KEYS = (
+    r"stock_status|stockStatus|is_in_stock|isInStock|is_salable|isSalable|salable_qty|salableQty|"
+    r"only_x_left_in_stock|onlyXLeftInStock|qty|quantity|max_sale_qty|maxSaleQty|inventory|"
+    r"availability|salesStatus|sales_status|purchasable|isPurchasable|orderable|isOrderable|"
+    r"available|isAvailable|in_stock|inStock|soldOut|sold_out"
+)
+_STOCK_RE = re.compile(r'\\*"(' + STOCK_KEYS + r')\\*"\s*:\s*\\*"?([A-Za-z_0-9.\-]{1,40})')
+
+
+def scan_stock_fields(text: str, source: str, limit: int = 40) -> list[tuple[str, str, str]]:
+    """Find "key": value pairs for stock-like keys in JSON or in JSON embedded in HTML."""
+    out, seen = [], set()
+    for m in _STOCK_RE.finditer(text):
+        item = (source, m.group(1), m.group(2))
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+            if len(out) >= limit:
+                break
+    return out
+
+
 def collect(page, product: dict) -> Evidence:
     ev = Evidence()
+    nintendo = product["retailer"] == "Nintendo Store"
 
     debug = os.environ.get("DEBUG") == "1"
 
@@ -172,8 +200,20 @@ def collect(page, product: dict) -> Evidence:
             found = re.findall(r'"availability_status"\s*:\s*"([A-Z_]+)"', json.dumps(data))
             ev.target_api_status.extend(found)
 
+    def on_nintendo_response(resp):
+        # Read-only: look at JSON the product page itself fetched (no extra requests made).
+        try:
+            if "nintendo" not in resp.url or "json" not in (resp.headers.get("content-type") or ""):
+                return
+            short = re.sub(r"\?.*", "", resp.url)[-80:]
+            ev.stock_fields.extend(scan_stock_fields(resp.text(), f"api {short}"))
+        except Exception:
+            pass
+
     if product["retailer"] == "Target":
         page.on("response", on_response)
+    if nintendo:
+        page.on("response", on_nintendo_response)
 
     resp = page.goto(product["url"], wait_until="domcontentloaded", timeout=45_000)
     ev.http_status = resp.status if resp else None
@@ -186,6 +226,11 @@ def collect(page, product: dict) -> Evidence:
     ev.main_buttons = data["buttons"]
     ev.page_text_head = data["head"]
     ev.price = data["price"]
+    if nintendo:
+        try:  # data embedded in the rendered page (e.g. __NEXT_DATA__ / hydration JSON)
+            ev.stock_fields.extend(scan_stock_fields(page.content(), "page"))
+        except Exception:
+            pass
     if debug:
         print(page.evaluate(DEBUG_JS))
         if product["retailer"] == "Target" and resp:
@@ -261,14 +306,21 @@ def check_once(ctx) -> list[tuple[dict, str, str]]:
     results = []
     for product in PRODUCTS:
         page = ctx.new_page()
+        ev = None
         try:
-            status, reason = decide(collect(page, product))
+            ev = collect(page, product)
+            status, reason = decide(ev)
         except Exception as e:  # timeouts, navigation errors
             status, reason = UNKNOWN, f"error: {type(e).__name__}: {e}"[:200]
         finally:
             page.close()
         results.append((product, status, reason))
         print(f"{time.strftime('%H:%M:%S')} {product['retailer']:15} {status:12} {reason}", flush=True)
+        # Log stock fields when the button says buyable (to diagnose "quantity not available"
+        # false positives), or always on test runs.
+        if ev and ev.stock_fields and (status == IN_STOCK or os.environ.get("DEBUG") == "1"):
+            for source, key, value in ev.stock_fields:
+                print(f"    stock field [{source}] {key}={value}", flush=True)
     return results
 
 

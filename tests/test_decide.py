@@ -136,3 +136,14 @@ def test_desktop_alert_ignores_test_pushes():
     d.handle({"event": "message", "tags": ["test_tube", "rotating_light", "in_stock"],
               "title": "[TEST] Zelda", "time": time.time(), "click": "test"})
     assert opened == []
+
+
+def test_scan_stock_fields_plain_and_escaped_json():
+    from check_stock import scan_stock_fields
+    plain = '{"sku":"121642","stock_status":"IN_STOCK","only_x_left_in_stock":null,"salable_qty":0}'
+    escaped = '<script>self.__next_f.push("{\\"stockStatus\\":\\"OUT_OF_STOCK\\",\\"isSalable\\":false}")</script>'
+    got = scan_stock_fields(plain, "api") + scan_stock_fields(escaped, "page")
+    assert ("api", "stock_status", "IN_STOCK") in got
+    assert ("api", "salable_qty", "0") in got
+    assert ("page", "stockStatus", "OUT_OF_STOCK") in got
+    assert ("page", "isSalable", "false") in got

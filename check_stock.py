@@ -287,6 +287,8 @@ def collect(page, product: dict) -> Evidence:
                                         if not isinstance(v, (dict, list)) or k in ("variants", "prices", "price")}
                                 print(f"  [debug] product record: {json.dumps(flat)[:6000]}", flush=True)
                                 print(f"  [debug] nested keys: {[k for k, v in o.items() if isinstance(v, (dict, list))]}", flush=True)
+                                for k in ("availability", "facets", "platform", "topLevelCategory"):
+                                    print(f"  [debug] {k}: {json.dumps(o.get(k))[:1500]}", flush=True)
                             for v in o.values():
                                 walk(v)
                         elif isinstance(o, list):

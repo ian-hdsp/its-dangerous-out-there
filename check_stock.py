@@ -423,8 +423,10 @@ def _notify_pushover(user, token, title, body, url, priority, tag, test) -> str 
     data = {"token": token, "user": user, "title": title[:250], "message": body[:1024],
             "url": url, "url_title": "Open product page", "priority": prio}
     if prio == 2:
-        # Repeat every 60 s until acknowledged, for up to 20 min (~one drop); tests stop sooner.
-        data.update(retry=60, expire=180 if test else 1200)
+        # Repeat every PUSHOVER_RETRY_SECONDS (default 180 = 3 min) until acknowledged, for up to
+        # 20 min (~one drop); tests stop after 3 min. Pushover requires retry >= 30 s.
+        retry = max(30, int(os.environ.get("PUSHOVER_RETRY_SECONDS") or 180))
+        data.update(retry=retry, expire=180 if test else 1200)
     r = requests.post(f"{PUSHOVER_API}/messages.json", data=data, timeout=15)
     r.raise_for_status()
     return r.json().get("receipt") if prio == 2 else None

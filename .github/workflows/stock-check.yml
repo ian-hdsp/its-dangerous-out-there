@@ -68,6 +68,7 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}     # optional second channel
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_RETRY_SECONDS: ${{ vars.PUSHOVER_RETRY_SECONDS }}   # emergency repeat interval (default 180)
           NOTIFY_ON_UNKNOWN: ${{ vars.NOTIFY_ON_UNKNOWN }}
           DEBUG: ${{ env.LIVE != 'true' && '1' || '' }}  # verbose log on test runs
           # Scheduled runs: check every CHECK_INTERVAL s for 50 min. Manual runs: one check.

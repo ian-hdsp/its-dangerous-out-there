@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write   # live runs commit new rows to drops.csv (the drop log)
 
 jobs:
   check:
@@ -73,6 +73,7 @@ jobs:
           CHECK_INTERVAL: "60"
           TEST_RUN: ${{ env.LIVE != 'true' && '1' || '' }}  # label pushes "[TEST]"
           SEND_TEST_PUSH: ${{ env.LIVE != 'true' && inputs.send_test_push && '1' || '' }}
+          DROP_LOG: ${{ env.LIVE == 'true' && 'drops.csv' || '' }}  # test runs never log drops
         run: python check_stock.py
 
       - name: Save status
@@ -81,3 +82,19 @@ jobs:
         with:
           path: state.json
           key: stock-state-${{ env.LIVE == 'true' && 'live' || 'test' }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Live runs: commit any drops that finished during this run. Keeps a permanent log, and
+      # the commits also stop GitHub disabling the schedule after 60 days without activity.
+      - name: Commit drop log
+        if: always() && env.LIVE == 'true'
+        run: |
+          if [ -z "$(git status --porcelain -- drops.csv)" ]; then echo "no new drops"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add drops.csv
+          git commit -m "chore: log Nintendo drop(s) [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep 5
+          done
+          echo "::warning::could not push drops.csv"

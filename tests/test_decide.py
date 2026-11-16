@@ -258,8 +258,8 @@ def test_reminder_push_is_labelled_as_same_drop(monkeypatch):
                         sent.append((title, body, priority, tag)))
     prod = {"retailer": "Nintendo Store", "url": "u"}
     state = {"Nintendo Store": {"status": IN_STOCK, "known": IN_STOCK,
-                                "since": 1763320586.0, "reminded": False}}  # 2025-11-16 19:16:26 UTC
-    monkeypatch.setattr(c.time, "time", lambda: 1763320586.0 + 600)
+                                "since": 1794856586.0, "reminded": False}}  # 2026-11-16 19:16:26 UTC
+    monkeypatch.setattr(c.time, "time", lambda: 1794856586.0 + 600)
     c.send_alerts([(prod, IN_STOCK, "buy button")], state, False)
     title, body, priority, tag = sent[0]
     assert title.startswith("Reminder (same drop)") and "IN STOCK" not in title
@@ -271,3 +271,43 @@ def test_reminder_not_lost_to_check_jitter():
     # the check 10 intervals later finishes 0.1 s "early": still gets the reminder
     steps = [(100.0, IN_STOCK), (100.0 + 599.9, IN_STOCK)]
     assert _seq_with_time(steps) == ["in_stock", "reminder"]
+
+
+def test_drop_log_records_one_row_per_drop(monkeypatch, tmp_path):
+    import csv
+    import check_stock as c
+    monkeypatch.setattr(c, "notify", lambda *a, **k: None)
+    log = tmp_path / "drops.csv"
+    monkeypatch.setenv("DROP_LOG", str(log))
+    prod = {"retailer": "Nintendo Store", "url": "u"}
+    state, clock = {}, [0.0]
+    monkeypatch.setattr(c.time, "time", lambda: clock[0])
+    base = 1794856527.0  # 2026-11-16 19:15:27 UTC (drop 3's last sold-out check)
+    timeline = [(0, OUT_OF_STOCK)] + [(59 + 60 * i, IN_STOCK) for i in range(19)] + [(1200, OUT_OF_STOCK)]
+    for t, s in timeline:
+        clock[0] = base + t
+        c.send_alerts([(prod, s, "r")], state, False)
+    rows = list(csv.DictReader(open(log)))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["start_after_utc"] == "2026-11-16T19:15:27Z" and r["start_by_utc"] == "2026-11-16T19:16:26Z"
+    assert r["end_after_utc"] == "2026-11-16T19:34:26Z" and r["end_by_utc"] == "2026-11-16T19:35:27Z"
+    assert r["min_minutes"] == "18.0" and r["max_minutes"] == "20.0"
+    assert r["start_pst"] == "11:16 AM PST" and r["start_est"] == "2:16 PM EST"
+    # a second drop appends a second row under the same header
+    for t, s in [(3600, IN_STOCK), (3660, OUT_OF_STOCK)]:
+        clock[0] = base + t
+        c.send_alerts([(prod, s, "r")], state, False)
+    assert len(list(csv.DictReader(open(log)))) == 2
+
+
+def test_no_drop_log_without_env(monkeypatch, tmp_path):
+    import check_stock as c
+    monkeypatch.setattr(c, "notify", lambda *a, **k: None)
+    monkeypatch.delenv("DROP_LOG", raising=False)
+    monkeypatch.chdir(tmp_path)
+    prod = {"retailer": "Nintendo Store", "url": "u"}
+    state = {}
+    for s in (OUT_OF_STOCK, IN_STOCK, OUT_OF_STOCK):
+        c.send_alerts([(prod, s, "r")], state, False)
+    assert list(tmp_path.iterdir()) == []

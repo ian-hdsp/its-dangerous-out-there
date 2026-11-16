@@ -400,11 +400,66 @@ def check_once(ctx) -> list[tuple[dict, str, str]]:
     return results
 
 
+DROP_LOG_FIELDS = ["retailer", "start_after_utc", "start_by_utc", "end_after_utc", "end_by_utc",
+                   "min_minutes", "max_minutes", "start_pst", "start_est"]
+
+
+def _iso(ts: float | None) -> str:
+    if ts is None:
+        return ""
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def drop_row(retailer: str, entry: dict, end_by: float) -> dict:
+    """One finished drop. Checks run every ~minute, so each edge is known to a window:
+    start_after = last sold-out check before it, start_by = first in-stock check (the push);
+    end_after = last in-stock check, end_by = first sold-out check (the sold-out push).
+    min/max_minutes bound how long it was really in stock. Unknown edges stay blank."""
+    start_after, start_by = entry.get("drop_start_after"), entry.get("since")
+    end_after = entry.get("last_in_at")
+    mins = lambda a, b: f"{(b - a) / 60:.1f}" if a is not None and b is not None else ""
+    pst, est = (drop_started_label(start_by).split(" / ") if start_by is not None else ("", ""))
+    return {
+        "retailer": retailer,
+        "start_after_utc": _iso(start_after), "start_by_utc": _iso(start_by),
+        "end_after_utc": _iso(end_after), "end_by_utc": _iso(end_by),
+        "min_minutes": mins(start_by, end_after), "max_minutes": mins(start_after, end_by),
+        "start_pst": pst, "start_est": est,
+    }
+
+
+def append_drop_log(path: str, row: dict) -> None:
+    import csv
+    new = not os.path.exists(path) or os.path.getsize(path) == 0
+    with open(path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=DROP_LOG_FIELDS)
+        if new:
+            w.writeheader()
+        w.writerow(row)
+
+
 def send_alerts(results, state: dict, notify_unknown: bool) -> None:
     for prod, status, reason in results:
         prev = state.get(prod["retailer"], {})
         now = time.time()
         alert, state[prod["retailer"]] = transition(prev, status, notify_unknown, now, REMINDER_SECS)
+        entry = state[prod["retailer"]]
+        # Drop log bookkeeping (live runs set DROP_LOG; test runs never write it).
+        if alert == "in_stock":
+            entry["drop_start_after"] = prev.get("last_out_at")
+        if alert == "sold_out" and os.environ.get("DROP_LOG"):
+            try:
+                row = drop_row(prod["retailer"], prev, now)  # prev: the drop's state before sell-out
+                append_drop_log(os.environ["DROP_LOG"], row)
+                print(f"  drop logged: {row}", flush=True)
+            except Exception as e:  # logging must never stop the watch loop
+                print(f"  drop log failed: {e}", flush=True)
+        if status == IN_STOCK:
+            entry["last_in_at"] = now
+        elif status == OUT_OF_STOCK:
+            entry["last_out_at"] = now
+            entry.pop("last_in_at", None)
+            entry.pop("drop_start_after", None)
         try:
             if alert == "in_stock":
                 notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})",
@@ -517,7 +572,7 @@ def transition(prev: dict, status: str, notify_unknown: bool = False,
         alert = "unknown"
     if status == OUT_OF_STOCK:
         since, reminded = None, False
-    return alert, {"status": status, "known": known, "since": since, "reminded": reminded}
+    return alert, {**prev, "status": status, "known": known, "since": since, "reminded": reminded}
 
 
 def drop_started_label(since: float) -> str:

@@ -26,8 +26,10 @@ PRODUCT_URL = ("https://www.nintendo.com/us/store/products/"
 
 
 def is_in_stock_alert(msg: dict) -> bool:
-    """True for the watcher's IN STOCK push (tagged "in_stock"), not sold-out or other pushes."""
-    return msg.get("event") == "message" and "in_stock" in (msg.get("tags") or [])
+    """True for the watcher's real IN STOCK push: tagged "in_stock", not a sold-out push, and
+    not a manual test run (tagged "test_tube", title "[TEST] ..."), which never opens the browser."""
+    tags = msg.get("tags") or []
+    return msg.get("event") == "message" and "in_stock" in tags and "test_tube" not in tags
 
 
 def alarm() -> None:

@@ -8,6 +8,7 @@ Env vars:
   NTFY_SERVER       optional, default https://ntfy.sh
   NOTIFY_ON_UNKNOWN optional "1" -> also push when a page can't be read (e.g. bot-blocked)
   DRY_RUN           optional "1" -> print instead of sending
+  TEST_RUN          optional "1" -> label every push "[TEST]" with a test-tube tag (manual runs)
 """
 from __future__ import annotations
 
@@ -237,13 +238,18 @@ def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str =
     """Send an ntfy push. `tag` (e.g. "in_stock") lets desktop_alert.py tell alert types apart."""
     topic = os.environ.get("NTFY_TOPIC")
     if os.environ.get("DRY_RUN") == "1" or not topic:
-        print(f"[notify skipped] {title}: {body} {url}")
+        prefix = "[TEST] " if os.environ.get("TEST_RUN") == "1" else ""
+        print(f"[notify skipped] {prefix}{title}: {body} {url}")
         return
     server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+    tags = ["rotating_light", tag]
+    if os.environ.get("TEST_RUN") == "1":  # manual/test run: make it unmistakable
+        title = "[TEST] " + title
+        tags = ["test_tube"] + tags
     headers = {
         "Title": title,
         "Priority": priority,
-        "Tags": ",".join(t for t in ("rotating_light", tag) if t),
+        "Tags": ",".join(t for t in tags if t),
         "Click": url,
         # A visible button too: easier to hit from a lock screen or watch than the body.
         "Actions": f"view, Open product page, {url}, clear=true",

@@ -106,3 +106,33 @@ def test_desktop_alert_only_acts_on_fresh_in_stock_pushes():
     d.handle({"event": "message", "tags": ["in_stock"], "time": time.time() - 3600, "click": "stale"})
     d.handle({"event": "message", "tags": ["rotating_light", "in_stock"], "time": time.time(), "click": "u1"})
     assert opened == ["u1"]
+
+
+def test_test_run_pushes_are_labelled(monkeypatch):
+    import check_stock as c
+    sent = {}
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(c.requests, "post", lambda url, data, headers, timeout: sent.update(headers) or Resp())
+    monkeypatch.setenv("NTFY_TOPIC", "t")
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.setenv("TEST_RUN", "1")
+    c.notify("Zelda Switch 2 IN STOCK at Nintendo Store", "b", "u", tag="in_stock")
+    assert sent["Title"].startswith("[TEST] ") and "test_tube" in sent["Tags"].split(",")
+    monkeypatch.delenv("TEST_RUN")
+    c.notify("Zelda Switch 2 IN STOCK at Nintendo Store", "b", "u", tag="in_stock")
+    assert not sent["Title"].startswith("[TEST]") and "test_tube" not in sent["Tags"]
+
+
+def test_desktop_alert_ignores_test_pushes():
+    import time
+    import desktop_alert as d
+    opened = []
+    d.webbrowser.open = lambda url, new=0: opened.append(url)
+    d.alarm = lambda: None
+    d.handle({"event": "message", "tags": ["test_tube", "rotating_light", "in_stock"],
+              "title": "[TEST] Zelda", "time": time.time(), "click": "test"})
+    assert opened == []

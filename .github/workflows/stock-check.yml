@@ -41,12 +41,13 @@ jobs:
 
       # Last run's statuses, so pushes go out only when a status changes. Cache keys are
       # immutable, so each run saves under its own key and restores the newest by prefix.
+      # Manual (test) runs keep separate state ("test") so they never affect real alerts.
       - name: Restore last status
         uses: actions/cache/restore@v4
         with:
           path: state.json
-          key: stock-state-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: stock-state-
+          key: stock-state-${{ github.event_name == 'schedule' && 'live' || 'test' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: stock-state-${{ github.event_name == 'schedule' && 'live' || 'test' }}-
 
       - name: Check stock
         env:
@@ -56,6 +57,7 @@ jobs:
           # Scheduled runs: check every CHECK_INTERVAL s for 50 min. Manual runs: one check.
           LOOP_MINUTES: ${{ github.event_name == 'schedule' && '50' || inputs.loop_minutes || '0' }}
           CHECK_INTERVAL: "60"
+          TEST_RUN: ${{ github.event_name != 'schedule' && '1' || '' }}  # label pushes "[TEST]"
         run: python check_stock.py
 
       - name: Save status
@@ -63,4 +65,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: state.json
-          key: stock-state-${{ github.run_id }}-${{ github.run_attempt }}
+          key: stock-state-${{ github.event_name == 'schedule' && 'live' || 'test' }}-${{ github.run_id }}-${{ github.run_attempt }}

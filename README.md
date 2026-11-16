@@ -17,6 +17,9 @@ Product: <https://www.nintendo.com/us/store/products/nintendo-switch-2-the-legen
    can't be read.
 3. Repo → **Actions** → **Zelda Switch 2 stock check → Run workflow**. The run summary
    shows IN_STOCK / OUT_OF_STOCK / UNKNOWN. Manual runs also print debug detail in the log.
+   **Manual runs are test runs:** any push they send is titled `[TEST] …` with a 🧪 tag,
+   they keep their own saved status (so they never affect real alerts), and
+   `desktop_alert.py` ignores them. Set `loop_minutes` to test the every-minute loop.
 
 The repo must stay **public**: Actions minutes are free for public repos, while a private
 repo would use ~13,000 min/month (the free tier is 2,000).

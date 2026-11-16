@@ -358,31 +358,42 @@ DEBUG_JS = r"""
 PUSHOVER_API = "https://api.pushover.net/1"
 
 
-def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str = "") -> str | None:
+def pushover_users() -> list[str]:
+    """PUSHOVER_USER may hold several User Keys, comma-separated (you, a friend, ...)."""
+    return [u.strip() for u in os.environ.get("PUSHOVER_USER", "").split(",") if u.strip()]
+
+
+def notify(title: str, body: str, url: str, priority: str = "urgent", tag: str = "") -> list[str]:
     """Send one alert to every configured channel: ntfy (NTFY_TOPIC) and Pushover
-    (PUSHOVER_USER + PUSHOVER_TOKEN). Channels are independent: one failing never stops the
-    other, and nothing here raises. `tag` (e.g. "in_stock") lets desktop_alert.py tell alert
-    types apart. Returns the Pushover emergency receipt (for cancelling repeats), if any."""
+    (PUSHOVER_USER + PUSHOVER_TOKEN; one message per person). Channels and people are
+    independent: one failing never stops the rest, and nothing here raises. `tag` (e.g.
+    "in_stock") lets desktop_alert.py tell alert types apart. Returns the Pushover emergency
+    receipts, one per person, so repeats can be cancelled when the drop ends."""
     test = os.environ.get("TEST_RUN") == "1"
     if test:  # manual/test run: make it unmistakable on every channel
         title = "[TEST] " + title
     topic = os.environ.get("NTFY_TOPIC")
-    po_user, po_token = os.environ.get("PUSHOVER_USER"), os.environ.get("PUSHOVER_TOKEN")
-    if os.environ.get("DRY_RUN") == "1" or not (topic or (po_user and po_token)):
+    po_users, po_token = pushover_users(), os.environ.get("PUSHOVER_TOKEN")
+    if os.environ.get("DRY_RUN") == "1" or not (topic or (po_users and po_token)):
         print(f"[notify skipped] {title}: {body} {url}")
-        return None
-    receipt = None
+        return []
+    receipts: list[str] = []
     if topic:
         try:
             _notify_ntfy(topic, title, body, url, priority, tag, test)
         except Exception as e:
             print(f"  ntfy push failed: {e}", flush=True)
-    if po_user and po_token:
-        try:
-            receipt = _notify_pushover(po_user, po_token, title, body, url, priority, tag, test)
-        except Exception as e:
-            print(f"  Pushover push failed: {e}", flush=True)
-    return receipt
+    if po_token:
+        # A separate message per person, so each acknowledges their own emergency alert
+        # (with one shared message, the first person to acknowledge stops it for everyone).
+        for i, user in enumerate(po_users, 1):
+            try:
+                receipt = _notify_pushover(user, po_token, title, body, url, priority, tag, test)
+                if receipt:
+                    receipts.append(receipt)
+            except Exception as e:  # keys are secrets: report which person, never the key
+                print(f"  Pushover push to person #{i} failed: {e}", flush=True)
+    return receipts
 
 
 def _notify_ntfy(topic, title, body, url, priority, tag, test) -> None:
@@ -419,16 +430,20 @@ def _notify_pushover(user, token, title, body, url, priority, tag, test) -> str 
     return r.json().get("receipt") if prio == 2 else None
 
 
-def cancel_pushover(receipt: str) -> None:
-    """Stop an emergency alert repeating (e.g. the drop sold out before it was acknowledged)."""
+def cancel_pushover(receipts) -> None:
+    """Stop emergency alerts repeating (e.g. the drop sold out before they were acknowledged).
+    Takes a list of receipts, or a single one (state saved by older versions)."""
     token = os.environ.get("PUSHOVER_TOKEN")
-    if not (receipt and token) or os.environ.get("DRY_RUN") == "1":
+    if isinstance(receipts, str):
+        receipts = [receipts]
+    if not (receipts and token) or os.environ.get("DRY_RUN") == "1":
         return
-    try:
-        requests.post(f"{PUSHOVER_API}/receipts/{receipt}/cancel.json", data={"token": token},
-                      timeout=15).raise_for_status()
-    except Exception as e:
-        print(f"  Pushover cancel failed: {e}", flush=True)
+    for receipt in receipts:
+        try:
+            requests.post(f"{PUSHOVER_API}/receipts/{receipt}/cancel.json", data={"token": token},
+                          timeout=15).raise_for_status()
+        except Exception as e:
+            print(f"  Pushover cancel failed: {e}", flush=True)
 
 
 def check_once(ctx) -> list[tuple[dict, str, str]]:
@@ -516,10 +531,10 @@ def send_alerts(results, state: dict, notify_unknown: bool) -> None:
             entry.pop("drop_start_after", None)
         try:
             if alert == "in_stock":
-                receipt = notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})",
-                                 prod["url"], tag="in_stock")
-                if receipt:
-                    entry["pushover_receipt"] = receipt
+                receipts = notify(f"Zelda Switch 2 IN STOCK at {prod['retailer']}", f"Tap to open. ({reason})",
+                                  prod["url"], tag="in_stock")
+                if receipts:
+                    entry["pushover_receipts"] = receipts  # one per person, to cancel on sell-out
             elif alert == "reminder":
                 # Same drop, not a new one: says so in the title, with when the drop started.
                 # No "in_stock" tag, so desktop_alert.py doesn't reopen the browser.
@@ -530,7 +545,8 @@ def send_alerts(results, state: dict, notify_unknown: bool) -> None:
                        f"Not a new drop. In stock for {mins} min so far. Tap to open.",
                        prod["url"], tag="repeat")
             elif alert == "sold_out":
-                cancel_pushover(entry.pop("pushover_receipt", None))  # stop repeats if unacknowledged
+                # stop repeats for anyone who hasn't acknowledged (old state used a single key)
+                cancel_pushover(entry.pop("pushover_receipts", None) or entry.pop("pushover_receipt", None))
                 notify(f"Zelda Switch 2 sold out again at {prod['retailer']}", reason, prod["url"], priority="low")
             elif alert == "unknown":
                 notify(f"Stock check couldn't read {prod['retailer']}", reason, prod["url"], priority="low")

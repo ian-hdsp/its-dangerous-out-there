@@ -359,7 +359,7 @@ def test_in_stock_goes_to_both_channels_as_emergency(monkeypatch):
     _pushover_env(monkeypatch)
     calls = _capture_posts(monkeypatch)
     receipt = c.notify("Zelda Switch 2 IN STOCK at Nintendo Store", "Tap", "https://p", tag="in_stock")
-    assert receipt == "R123"
+    assert receipt == ["R123"]
     po = [x for x in calls if "pushover" in x["url"]][0]["data"]
     assert po["priority"] == 2 and po["retry"] == 60 and po["expire"] == 1200
     assert po["url"] == "https://p" and po["title"] == "Zelda Switch 2 IN STOCK at Nintendo Store"
@@ -380,9 +380,9 @@ def test_channels_are_independent(monkeypatch):
     import check_stock as c
     _pushover_env(monkeypatch)
     calls = _capture_posts(monkeypatch, fail_hosts=("ntfy",))
-    assert c.notify("t", "b", "u", tag="in_stock") == "R123"   # ntfy down: Pushover still sent
+    assert c.notify("t", "b", "u", tag="in_stock") == ["R123"]  # ntfy down: Pushover still sent
     calls = _capture_posts(monkeypatch, fail_hosts=("pushover",))
-    assert c.notify("t", "b", "u", tag="in_stock") is None     # Pushover down: no exception
+    assert c.notify("t", "b", "u", tag="in_stock") == []       # Pushover down: no exception
     assert any("ntfy" in x["url"] for x in calls)
 
 
@@ -394,8 +394,53 @@ def test_sold_out_cancels_unacknowledged_emergency(monkeypatch):
     state = {}
     for s in (OUT_OF_STOCK, IN_STOCK):
         c.send_alerts([(prod, s, "r")], state, False)
-    assert state["Nintendo Store"]["pushover_receipt"] == "R123"
+    assert state["Nintendo Store"]["pushover_receipts"] == ["R123"]
     calls.clear()
     c.send_alerts([(prod, OUT_OF_STOCK, "r")], state, False)
     assert any(x["url"].endswith("/receipts/R123/cancel.json") for x in calls)
-    assert "pushover_receipt" not in state["Nintendo Store"]
+    assert "pushover_receipts" not in state["Nintendo Store"]
+
+
+def test_each_person_gets_their_own_pushover_alert(monkeypatch):
+    import check_stock as c
+    _pushover_env(monkeypatch, ntfy=False)
+    monkeypatch.setenv("PUSHOVER_USER", "me_key, friend_key ,")
+    receipts_by_user = {"me_key": "R1", "friend_key": "R2"}
+    calls = []
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        calls.append(data)
+        return _FakeResp({"status": 1, "receipt": receipts_by_user.get(data.get("user"))})
+    monkeypatch.setattr(c.requests, "post", fake_post)
+    receipts = c.notify("Zelda Switch 2 IN STOCK at Nintendo Store", "b", "u", tag="in_stock")
+    assert [d["user"] for d in calls] == ["me_key", "friend_key"]   # separate messages
+    assert all(d["priority"] == 2 for d in calls) and receipts == ["R1", "R2"]
+
+
+def test_one_bad_key_does_not_block_the_other_person(monkeypatch, capsys):
+    import check_stock as c
+    _pushover_env(monkeypatch, ntfy=False)
+    monkeypatch.setenv("PUSHOVER_USER", "bad_key,friend_key")
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        return _FakeResp({"receipt": "R2"}, fail=data.get("user") == "bad_key")
+    monkeypatch.setattr(c.requests, "post", fake_post)
+    assert c.notify("t", "b", "u", tag="in_stock") == ["R2"]
+    out = capsys.readouterr().out
+    assert "person #1 failed" in out and "bad_key" not in out   # never print a key
+
+
+def test_sold_out_cancels_every_persons_alert_and_old_single_receipt(monkeypatch):
+    import check_stock as c
+    _pushover_env(monkeypatch, ntfy=False)
+    calls = _capture_posts(monkeypatch)
+    prod = {"retailer": "Nintendo Store", "url": "u"}
+    state = {"Nintendo Store": {"status": IN_STOCK, "known": IN_STOCK, "pushover_receipts": ["R1", "R2"]}}
+    c.send_alerts([(prod, OUT_OF_STOCK, "r")], state, False)
+    cancelled = [x["url"] for x in calls if x["url"].endswith("/cancel.json")]
+    assert cancelled == [f"{c.PUSHOVER_API}/receipts/R1/cancel.json", f"{c.PUSHOVER_API}/receipts/R2/cancel.json"]
+    # state saved by the previous version (single receipt) is still cancelled
+    calls.clear()
+    state = {"Nintendo Store": {"status": IN_STOCK, "known": IN_STOCK, "pushover_receipt": "R9"}}
+    c.send_alerts([(prod, OUT_OF_STOCK, "r")], state, False)
+    assert any(x["url"].endswith("/receipts/R9/cancel.json") for x in calls)

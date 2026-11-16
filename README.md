@@ -62,6 +62,13 @@ are set. ntfy and Pushover are independent: if one fails, the other still sends.
 | Reminder (same drop) | High (1): one alert |
 | Sold out again | Quiet (-1) |
 
+**More than one person (e.g. a friend):** put several User Keys in `PUSHOVER_USER`,
+comma-separated (`yourKey,friendKey`). Each person gets their **own** alert and acknowledges
+it themselves (with one shared message, the first to acknowledge would stop it for everyone);
+one bad key never blocks the others, and selling out stops everyone's repeats. Each person
+needs their own Pushover account (and license after the trial). For ntfy, a friend just
+subscribes to the same topic.
+
 Setup: install Pushover, turn on **Settings → Critical Alerts** in the app (emergency alerts
 then sound even on silent / in Focus), copy **Your User Key** from pushover.net, create an
 application there for an **API Token**, and add both as repo secrets. Test it with a manual

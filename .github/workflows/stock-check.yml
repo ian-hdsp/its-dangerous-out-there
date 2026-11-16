@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: "*/5 * * * *"   # keeps a run queued; each run itself checks every minute (see LOOP_MINUTES)
   workflow_dispatch:         # "Run workflow" button for manual tests
+    inputs:
+      loop_minutes:
+        description: "Minutes to keep checking every 60 s (0 = check once)"
+        default: "0"
 
 concurrency:
   group: stock-check
@@ -50,7 +54,7 @@ jobs:
           NOTIFY_ON_UNKNOWN: ${{ vars.NOTIFY_ON_UNKNOWN }}
           DEBUG: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}  # verbose log on manual runs
           # Scheduled runs: check every CHECK_INTERVAL s for 50 min. Manual runs: one check.
-          LOOP_MINUTES: ${{ github.event_name == 'schedule' && '50' || '0' }}
+          LOOP_MINUTES: ${{ github.event_name == 'schedule' && '50' || inputs.loop_minutes || '0' }}
           CHECK_INTERVAL: "60"
         run: python check_stock.py
 

@@ -14,8 +14,10 @@ on:
         options: [test, live]
         default: test
 
+# Live runs (scheduled, or manual with mode=live) queue one at a time; test runs use their
+# own queue, so a test never displaces the live run waiting to take over.
 concurrency:
-  group: stock-check
+  group: stock-check-${{ (github.event_name == 'schedule' || inputs.mode == 'live') && 'live' || 'test' }}
   cancel-in-progress: false
 
 permissions:

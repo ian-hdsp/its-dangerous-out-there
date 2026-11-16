@@ -36,7 +36,7 @@ repo would use ~13,000 min/month (the free tier is 2,000).
 - **Pushes on a status change, plus one reminder per drop:** one **urgent** push when it
   comes in stock; if it's still in stock 10 minutes later (`REMINDER_MINUTES`), one urgent
   push titled **"Reminder (same drop): … still in stock — started 11:16 AM PST / 2:16 PM
-  EST"** with "Not a new drop" in the body (no 🔴 in_stock tag, so `desktop_alert.py`
+  EST"** with "Not a new drop" in the body (no `in_stock` tag, so `desktop_alert.py`
   doesn't reopen the browser); then one low-priority "sold out again" push when it's gone.
   Drops on Nov 16 lasted ~20 minutes each, so the reminder lands mid-drop. The last status
   is kept in the Actions cache (`state.json`); a one-off page failure mid-drop neither
